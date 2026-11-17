@@ -52,13 +52,13 @@ describe("eBay Browse adapter", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it("rejects unsafe links, mismatched currencies and invalid search bounds", async () => {
+  it("rejects eBay lookalike domains and invalid search bounds", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(tokenPayload), {
         status: 200, headers: { "content-type": "application/json" },
       }))
       .mockResolvedValue(new Response(JSON.stringify({ itemSummaries: [{
-        itemId: "1", title: "Item", itemWebUrl: "https://evil.example/item",
+        itemId: "1", title: "Item", itemWebUrl: "https://ebay.com.attacker.example/item",
         price: { value: "10.00", currency: "EUR" },
       }] }), { status: 200, headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
