@@ -105,10 +105,7 @@ async function execute(task: NonNullable<Awaited<ReturnType<typeof claimTask>>>)
         known_costs_minor: Math.max(0, totalCost - purchasePrice),
         currency: typeof input.currency === "string" ? input.currency : "EUR",
         checkpoint: task.checkpoint ?? { schema_version: 1, findings: {} },
-        checkpoint_callback_url: new URL(
-          "/internal/agent-tasks/" + encodeURIComponent(task.id) + "/checkpoint",
-          apiBaseUrl,
-        ).toString(),
+        checkpoint_task_id: task.id,
         worker_id: workerId,
       }),
       signal: AbortSignal.timeout(requestTimeoutMs),
