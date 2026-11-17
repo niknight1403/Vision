@@ -176,7 +176,8 @@ suite("authenticated deal review routes (RBAC)", () => {
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual({ error: "DEAL_SCAN_PROVIDER_NOT_FOUND" });
   });
-\n  it("rejects a wrong password without issuing a session", async () => {
+
+  it("rejects a wrong password without issuing a session", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/v1/auth/login",
