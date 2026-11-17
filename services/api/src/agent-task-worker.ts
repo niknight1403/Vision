@@ -38,6 +38,7 @@ async function claimTask() {
       taskType: "HIDDEN_TREASURE_ANALYSIS",
       OR: [
         { status: "QUEUED", availableAt: { lte: now } },
+        { status: "CHECKPOINTED" },
         { status: "RUNNING", leaseUntil: { lte: now } },
       ],
     },
