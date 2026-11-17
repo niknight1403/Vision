@@ -7,9 +7,12 @@ import { config } from "./config.js";
 import { authenticateBearerToken, requireAdmin, type AuthenticatedPrincipal } from "./auth-service.js";
 import { loginWithPassword, revokeRefreshToken, rotateRefreshToken } from "./auth-session-service.js";
 import { listDealCandidates, reviewDealCandidate } from "./deal-candidate-service.js";
+import { runAndPersistDealScan } from "./deal-scan-service.js";
+import { createConfiguredProviderRegistry } from "./providers/bootstrap.js";
+import type { ProviderRegistry } from "./providers/registry.js";
 
 export interface ServerDependencies {
-  prisma: PrismaClient;
+  prisma: PrismaClient;\n  /** Server-configured, read-only marketplace providers. */\n  providers?: ProviderRegistry;
   /** HS256 signing secret for access tokens; unset means the auth routes stay closed. */
   authSigningSecret?: string | undefined;
   now?: () => Date;
@@ -41,7 +44,7 @@ const STATUS_BY_ERROR: Readonly<Record<string, number>> = Object.freeze({
   DEAL_NOT_ELIGIBLE_FOR_REVIEW_APPROVAL: 422,
   DEAL_REVIEW_FIELDS_REQUIRED: 400,
   DEAL_LIST_LIMIT_INVALID: 400,
-  VISION_INSPECTOR_NOT_CONFIGURED: 503,
+  VISION_INSPECTOR_NOT_CONFIGURED: 503,\n  DEAL_SCAN_INPUT_INVALID: 400,\n  DEAL_SCAN_PROVIDER_UNAVAILABLE: 503,\n  DEAL_SCAN_PROVIDER_NOT_FOUND: 404,\n  DEAL_SCAN_PROVIDER_CAPABILITY_UNAVAILABLE: 422,\n  DEAL_SCAN_UPSTREAM_FAILED: 502,
   VISION_IMAGE_URL_REQUIRED: 400,
   TREASURE_ANALYSIS_IDEMPOTENCY_REQUIRED: 400,
   TREASURE_ANALYSIS_IDEMPOTENCY_CONFLICT: 409,
@@ -165,7 +168,105 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     }
   });
 
-  app.get("/v1/deals", async (request, reply) => {
+
+  app.get("/v1/providers", async (request, reply) => {
+    try {
+      await principalFrom(request);
+      return reply.code(200).send({ providers: providers.list().map((provider) => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        capabilities: provider.capabilities,
+        simulated: provider.simulated,
+      })) });
+    } catch (error) { return fail(reply, error); }
+  });
+
+  app.post("/v1/deals/scan", async (request, reply) => {
+    try {
+      const principal = await principalFrom(request);
+      requireAdmin(principal);
+      const body = request.body as Record<string, unknown> | undefined;
+      const providerId = body?.providerId;
+      const query = body?.query;
+      const limit = body?.limit ?? 20;
+      const currency = body?.currency ?? "EUR";
+      const costs = body?.costs as Record<string, unknown> | undefined;
+      const context = body?.context as Record<string, unknown> | undefined;
+      const riskLimits = context?.riskLimits as Record<string, unknown> | undefined;
+      const amount = (value: unknown): bigint => {
+        if (typeof value !== "string" || !/^(0|[1-9][0-9]{0,17})$/.test(value)) {
+          throw new Error("DEAL_SCAN_INPUT_INVALID");
+        }
+        return BigInt(value);
+      };
+      if (typeof providerId !== "string" || !/^[a-z0-9][a-z0-9._-]{1,63}$/.test(providerId) ||
+          typeof query !== "string" || !query.trim() || query.length > 200 ||
+          !Number.isInteger(limit) || (limit as number) < 1 || (limit as number) > 50 ||
+          currency !== "EUR" || !costs || !context || !riskLimits ||
+          !Number.isInteger(context.openTrades) || (context.openTrades as number) < 0) {
+        throw new Error("DEAL_SCAN_INPUT_INVALID");
+      }
+      const provider = providers.list().find((entry) => entry.providerId === providerId);
+      if (!provider) throw new Error("DEAL_SCAN_PROVIDER_NOT_FOUND");
+      if (!provider.capabilities.includes("PRODUCT_SEARCH")) {
+        throw new Error("DEAL_SCAN_PROVIDER_CAPABILITY_UNAVAILABLE");
+      }
+      const requiredCostKeys = ["inboundShippingCents", "outboundShippingCents",
+        "marketplaceFeeCents", "paymentFeeCents", "packagingCents", "riskReserveCents"] as const;
+      if (requiredCostKeys.some((key) => costs[key] === undefined) ||
+          ["maxTradeCents", "maxOpenTrades", "maxDailyLossCents", "minProfitCents",
+            "minRoiBasisPoints"].some((key) => riskLimits[key] === undefined)) {
+        throw new Error("DEAL_SCAN_INPUT_INVALID");
+      }
+      if (!Number.isInteger(riskLimits.maxOpenTrades) || (riskLimits.maxOpenTrades as number) < 1) {
+        throw new Error("DEAL_SCAN_INPUT_INVALID");
+      }
+      const scanInput = {
+        providerId,
+        query: query.trim(),
+        limit: limit as number,
+        currency: "EUR",
+        costs: {
+          inboundShippingCents: amount(costs.inboundShippingCents),
+          outboundShippingCents: amount(costs.outboundShippingCents),
+          marketplaceFeeCents: amount(costs.marketplaceFeeCents),
+          paymentFeeCents: amount(costs.paymentFeeCents),
+          packagingCents: amount(costs.packagingCents),
+          riskReserveCents: amount(costs.riskReserveCents),
+        },
+        context: {
+          resalePriceCents: amount(context.resalePriceCents),
+          openTrades: context.openTrades as number,
+          dailyLossCents: amount(context.dailyLossCents),
+          riskLimits: {
+            maxTradeCents: amount(riskLimits.maxTradeCents),
+            maxOpenTrades: riskLimits.maxOpenTrades as number,
+            maxDailyLossCents: amount(riskLimits.maxDailyLossCents),
+            minProfitCents: amount(riskLimits.minProfitCents),
+            minRoiBasisPoints: amount(riskLimits.minRoiBasisPoints),
+          },
+        },
+      };
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(new Error("DEAL_SCAN_TIMEOUT")), 30_000);
+      try {
+        const result = await runAndPersistDealScan({ prisma, providers }, scanInput, controller.signal);
+        return reply.code(200).send({ ...result, currency: "EUR",
+          resalePriceSource: "ADMIN_SUPPLIED_ESTIMATE",
+          profitMeaning: "ESTIMATE_NOT_REALIZED",
+          purchaseAuthorized: false });
+      } catch (error) {
+        if (error instanceof Error && error.message === "DEAL_SCAN_TIMEOUT") {
+          return reply.code(504).send({ error: "DEAL_SCAN_TIMEOUT" });
+        }
+        request.log.warn({ err: error }, "marketplace deal scan failed");
+        return reply.code(502).send({ error: "DEAL_SCAN_UPSTREAM_FAILED" });
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (error) { return fail(reply, error); }
+  });
+\n  app.get("/v1/deals", async (request, reply) => {
     try {
       await principalFrom(request);
       const query = request.query as Record<string, unknown>;
