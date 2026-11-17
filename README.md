@@ -53,7 +53,7 @@ broker. See [docs/advanced-strategies.md](docs/advanced-strategies.md).
 
 ## Getting started
 
-Requirements: Node.js 20+ and npm.
+Requirements: Node.js 22.13+ and npm.
 
 ```bash
 npm ci

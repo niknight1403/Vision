@@ -12,6 +12,9 @@
     "extra": {
       "tradingMode": "PAPER",
       "liveTradingEnabled": false
-    }
+    },
+    "plugins": [
+      "expo-status-bar"
+    ]
   }
 }
