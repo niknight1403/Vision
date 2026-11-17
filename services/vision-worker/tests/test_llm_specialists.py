@@ -65,10 +65,11 @@ async def test_llm_specialist_does_not_call_cloud_without_configured_fallback():
         chat = type("Chat", (), {"completions": FakeCompletions()})()
 
     adapters = build_llm_specialists(FakeClient(), model="local-model")
-    result = await adapters[SpecialistRole.COLLECTOR](ProductBrief(
-        candidate_id="no-fallback", title="Vintage camera", asking_price_minor=5000,
-    ))
     with pytest.raises(RuntimeError, match="provider unavailable"):
+        await adapters[SpecialistRole.COLLECTOR](ProductBrief(
+            candidate_id="no-fallback", title="Vintage camera", asking_price_minor=5000,
+        ))
+
         await adapters[SpecialistRole.COLLECTOR](ProductBrief(
             candidate_id="no-fallback", title="Vintage camera", asking_price_minor=5000,
         ))
