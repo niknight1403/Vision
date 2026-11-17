@@ -100,3 +100,28 @@ jobs:
           path: /tmp/autonomagent-android-export/
           if-no-files-found: error
           retention-days: 14
+
+  android-export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.1"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install from lockfile
+        run: npm ci
+      - name: Export Android JavaScript bundle
+        working-directory: apps/mobile
+        run: npx expo export --platform android --output-dir /tmp/autonomagent-android-export
+      - name: Upload Android JS bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: autonomagent-android-js-${{ github.sha }}
+          path: /tmp/autonomagent-android-export/
+          if-no-files-found: error
+          retention-days: 14
