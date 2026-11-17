@@ -13,4 +13,4 @@ COPY . .
 RUN npx prisma generate --schema services/api/prisma/schema.prisma \
     && npm run build --workspace @autonomagent/api
 WORKDIR /workspace
-CMD ["npm", "run", "start", "--workspace", "@autonomagent/api"]
+CMD ["sh", "-c", "npx prisma migrate deploy --schema services/api/prisma/schema.prisma && npm run start --workspace @autonomagent/api"]
