@@ -8,7 +8,9 @@ COPY package.json package-lock.json ./
 COPY apps/mobile/package.json apps/mobile/package.json
 COPY services/api/package.json services/api/package.json
 COPY packages/trading-core/package.json packages/trading-core/package.json
-RUN npm ci
+# Prisma CLI and TypeScript are build tools declared in workspace devDependencies.
+# Include them explicitly because NODE_ENV=production otherwise makes npm ci omit them.
+RUN npm ci --include=dev
 COPY . .
 RUN npx prisma generate --schema services/api/prisma/schema.prisma \
     && npm run build --workspace @autonomagent/api
