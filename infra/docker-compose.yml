@@ -1,0 +1,54 @@
+name: vision-stack
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-autonomagent}
+      POSTGRES_USER: ${POSTGRES_USER:-autonomagent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U ${POSTGRES_USER:-autonomagent} -d ${POSTGRES_DB:-autonomagent}]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: [redis-server, --appendonly, "yes", --requirepass, ${REDIS_PASSWORD:?Set REDIS_PASSWORD in infra/.env}]
+    volumes: [redis_data:/data]
+    networks: [backend]
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes: [ollama_data:/root/.ollama]
+    expose: ["11434"]
+    networks: [backend]
+  vision-worker:
+    build:
+      context: ../services/vision-worker
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      VISION_WORKER_HOST: 0.0.0.0
+      VISION_WORKER_PORT: "8091"
+      VISION_WORKER_TOKEN: ${VISION_WORKER_TOKEN:?Set VISION_WORKER_TOKEN in infra/.env}
+      VISION_ALLOWED_IMAGE_HOSTS: ${VISION_ALLOWED_IMAGE_HOSTS:?Set exact image host allowlist}
+      LLM_API_KEY: ${LLM_API_KEY:-ollama}
+      LLM_BASE_URL: http://ollama:11434/v1
+      VISION_MODEL: ${VISION_MODEL:-qwen2.5-vl:7b}
+      LLM_FALLBACK_BASE_URL: ${LLM_FALLBACK_BASE_URL:-}
+      LLM_FALLBACK_API_KEY: ${LLM_FALLBACK_API_KEY:-}
+      LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-}
+    depends_on: [ollama]
+    expose: ["8091"]
+    networks: [backend]
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:
+networks:
+  backend:
+    internal: true
