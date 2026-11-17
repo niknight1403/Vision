@@ -70,6 +70,3 @@ async def test_llm_specialist_does_not_call_cloud_without_configured_fallback():
             candidate_id="no-fallback", title="Vintage camera", asking_price_minor=5000,
         ))
 
-        await adapters[SpecialistRole.COLLECTOR](ProductBrief(
-            candidate_id="no-fallback", title="Vintage camera", asking_price_minor=5000,
-        ))
