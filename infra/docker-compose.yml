@@ -26,6 +26,48 @@ services:
     volumes: [ollama_data:/root/.ollama]
     expose: ["11434"]
     networks: [backend]
+  api:
+    build:
+      context: ..
+      dockerfile: services/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8080"
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-autonomagent}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}@postgres:5432/${POSTGRES_DB:-autonomagent}?schema=public
+      AUTH_SIGNING_SECRET: ${AUTH_SIGNING_SECRET:?Set AUTH_SIGNING_SECRET in infra/.env}
+      VISION_WORKER_URL: http://vision-worker:8091
+      VISION_WORKER_TOKEN: ${VISION_WORKER_TOKEN:?Set VISION_WORKER_TOKEN in infra/.env}
+      AGENT_WORKER_POLL_INTERVAL_MS: "1500"
+    command: ["sh", "-c", "npx prisma migrate deploy --schema services/api/prisma/schema.prisma && npm run start --workspace @autonomagent/api"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vision-worker:
+        condition: service_started
+    ports:
+      - "${API_BIND_ADDRESS:-127.0.0.1}:8080:8080"
+    networks: [backend]
+
+  agent-worker:
+    build:
+      context: ..
+      dockerfile: services/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-autonomagent}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}@postgres:5432/${POSTGRES_DB:-autonomagent}?schema=public
+      VISION_WORKER_URL: http://vision-worker:8091
+      VISION_WORKER_TOKEN: ${VISION_WORKER_TOKEN:?Set VISION_WORKER_TOKEN in infra/.env}
+      AGENT_WORKER_POLL_INTERVAL_MS: "1500"
+    command: ["npm", "run", "worker", "--workspace", "@autonomagent/api"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    networks: [backend]
+
   vision-worker:
     build:
       context: ../services/vision-worker
