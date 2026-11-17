@@ -90,6 +90,7 @@ function errorCode(error: unknown): string {
 
 export async function buildServer(dependencies: ServerDependencies): Promise<FastifyInstance> {
   const { prisma } = dependencies;
+  const providers = dependencies.providers ?? createConfiguredProviderRegistry();
   const now = dependencies.now ?? (() => new Date());
   const app = Fastify({ logger: process.env.NODE_ENV !== "test", requestIdHeader: "x-request-id" });
 
