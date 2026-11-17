@@ -1,0 +1,181 @@
+name: Android preview APK (PAPER only)
+
+# Builds an installable, PAPER-only preview APK of the AutonomAgent mobile app
+# without EAS or any Expo account: Expo prebuild + Gradle on the runner, signed
+# with the debug keystore the generated project already uses for release.
+#
+# Deliberately manual: a native build takes ~15-25 minutes, so it does not run
+# on every push. Nothing here publishes a release or touches trading state.
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: "Optional API base URL baked in as EXPO_PUBLIC_API_URL (must be https). Empty = app without backend."
+        required: false
+        default: ""
+      architectures:
+        description: "Android ABIs to build"
+        required: false
+        type: choice
+        default: arm64-v8a
+        options:
+          - arm64-v8a
+          - arm64-v8a,armeabi-v7a
+          - arm64-v8a,armeabi-v7a,x86,x86_64
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-preview-apk-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  EXPO_PUBLIC_API_URL: ${{ inputs.api_url }}
+  ARCHITECTURES: ${{ inputs.architectures || 'arm64-v8a' }}
+
+jobs:
+  preview-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.1"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install from lockfile
+        run: npm ci
+
+      - name: Validate the optional API URL
+        run: |
+          if [ -z "$EXPO_PUBLIC_API_URL" ]; then
+            echo "no backend URL baked into this build"
+            exit 0
+          fi
+          case "$EXPO_PUBLIC_API_URL" in
+            https://*) ;;
+            *) echo "api_url must start with https://" >&2; exit 1 ;;
+          esac
+          if printf '%s' "$EXPO_PUBLIC_API_URL" | grep -Eqi 'secret|token|password|api[_-]?key'; then
+            echo "api_url must be a plain endpoint, never carry a credential" >&2
+            exit 1
+          fi
+
+      - name: Enforce the PAPER lockdown
+        working-directory: apps/mobile
+        run: npm run verify:paper
+
+      - name: Generate the native Android project
+        working-directory: apps/mobile
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Show the Android SDK inventory
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/ndk" 2>/dev/null || echo "no preinstalled NDK, Gradle installs one"
+          ls "$ANDROID_HOME/platforms" 2>/dev/null | tail -5
+
+      - name: Build the release APK
+        working-directory: apps/mobile/android
+        run: |
+          ./gradlew :app:assembleRelease \
+            -PreactNativeArchitectures="$ARCHITECTURES" \
+            --no-daemon --stacktrace
+
+      - name: Verify the APK and collect evidence
+        working-directory: apps/mobile
+        run: |
+          set -euo pipefail
+          APK=$(find android/app/build/outputs/apk/release -maxdepth 1 -name '*.apk' | head -1)
+          if [ -z "$APK" ]; then echo "no APK produced" >&2; exit 1; fi
+
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "build-tools: $BUILD_TOOLS"
+
+          echo "## APK signature" >> "$GITHUB_STEP_SUMMARY"
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | tee -a "$GITHUB_STEP_SUMMARY"
+
+          BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$APK")
+          PACKAGE=$(printf '%s\n' "$BADGING" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+          VERSION_CODE=$(printf '%s\n' "$BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
+          VERSION_NAME=$(printf '%s\n' "$BADGING" | sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p")
+          if [ "$PACKAGE" != "com.autonomagent.trader" ]; then
+            echo "unexpected package id: $PACKAGE" >&2
+            exit 1
+          fi
+
+          # The JS bundle inside the APK must still be the PAPER build.
+          BUNDLE=$(unzip -Z1 "$APK" | grep -E 'index\.android\.bundle$' | head -1)
+          if [ -z "$BUNDLE" ]; then echo "no JS bundle inside the APK" >&2; exit 1; fi
+          unzip -p "$APK" "$BUNDLE" > /tmp/index.android.bundle
+          PAPER_HITS=$(grep -a -c "PAPER" /tmp/index.android.bundle || true)
+          if [ "$PAPER_HITS" -lt 1 ]; then
+            echo "the JS bundle does not mention PAPER; refusing this build" >&2
+            exit 1
+          fi
+
+          SHA256=$(sha256sum "$APK" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$APK")
+          ARTIFACT_NAME="autonomagent-paper-preview-${GITHUB_SHA::12}"
+
+          jq -n \
+            --arg package "$PACKAGE" \
+            --arg versionName "$VERSION_NAME" \
+            --arg versionCode "$VERSION_CODE" \
+            --arg sha256 "$SHA256" \
+            --argjson sizeBytes "$SIZE" \
+            --arg bundle "$BUNDLE" \
+            --argjson paperMarkers "$PAPER_HITS" \
+            --arg apiUrl "$EXPO_PUBLIC_API_URL" \
+            --arg commit "$GITHUB_SHA" \
+            --arg architectures "$ARCHITECTURES" \
+            '{package: $package, versionName: $versionName, versionCode: $versionCode, sha256: $sha256, sizeBytes: $sizeBytes, bundle: $bundle, paperMarkers: $paperMarkers, apiUrl: $apiUrl, commit: $commit, architectures: $architectures, tradingMode: "PAPER", liveTradingEnabled: false}' \
+            > build-info.json
+
+          {
+            echo ""
+            echo "## Build artifact"
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Package | \`$PACKAGE\` |"
+            echo "| Version | \`$VERSION_NAME\` (code $VERSION_CODE) |"
+            echo "| APK size | $SIZE bytes |"
+            echo "| SHA-256 | \`$SHA256\` |"
+            echo "| Bundle | \`$BUNDLE\` |"
+            echo "| PAPER markers in bundle | $PAPER_HITS |"
+            echo "| Backend URL | \`${EXPO_PUBLIC_API_URL:-(none)}\` |"
+            echo "| ABIs | \`$ARCHITECTURES\` |"
+            echo "| Commit | \`$GITHUB_SHA\` |"
+            echo "| Artifact | \`$ARTIFACT_NAME\` |"
+            echo ""
+            echo "Signed with the project's debug keystore: installable for testing, not for the Play Store."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
+
+      - name: Upload the preview APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: |
+            apps/mobile/${{ env.APK_PATH }}
+            apps/mobile/build-info.json
+          if-no-files-found: error
+          retention-days: 30
