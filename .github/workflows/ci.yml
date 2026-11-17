@@ -88,6 +88,30 @@ jobs:
         run: npm test
       - name: Block high and critical dependency advisories
         run: npm audit --audit-level=high
+
+  api-docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Build API container (no push)
+        run: docker build --file services/api/Dockerfile --tag autonomagent-api:ci .
+
+  android-export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.1"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install from lockfile
+        run: npm ci
       - name: Export Android JavaScript bundle
         working-directory: apps/mobile
         run: npx expo export --platform android --output-dir /tmp/autonomagent-android-export
@@ -98,12 +122,3 @@ jobs:
           path: /tmp/autonomagent-android-export/
           if-no-files-found: error
           retention-days: 14
-
-  api-docker-build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-      - name: Build API container (no push)
-        run: docker build --file services/api/Dockerfile --tag autonomagent-api:ci .
