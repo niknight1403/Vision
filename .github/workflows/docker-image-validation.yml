@@ -1,0 +1,49 @@
+name: API Docker image validation
+
+on:
+  pull_request:
+    branches:
+      - main
+      - feat/hybrid-ai-mcp-infrastructure
+    paths:
+      - "services/api/**"
+      - "packages/trading-core/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".dockerignore"
+      - ".github/workflows/docker-image-validation.yml"
+  push:
+    branches:
+      - main
+      - feat/hybrid-ai-mcp-infrastructure
+    paths:
+      - "services/api/**"
+      - "packages/trading-core/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".dockerignore"
+      - ".github/workflows/docker-image-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-api-image:
+    name: Build API Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/api/Dockerfile
+          push: false
+          tags: vision-api:ci
