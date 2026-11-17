@@ -92,6 +92,14 @@ class VisionTreasureInspector:
             timeout=45.0,
             max_retries=1,
         )
+        self.fallback_model = os.getenv("LLM_FALLBACK_MODEL", "")
+        self.fallback_client = None
+        self._owns_fallback_client = False
+        fallback_url = os.getenv("LLM_FALLBACK_BASE_URL", "").strip()
+        fallback_key = os.getenv("LLM_FALLBACK_API_KEY", "").strip()
+        if fallback_url and fallback_key:
+            self.fallback_client = AsyncOpenAI(api_key=fallback_key, base_url=fallback_url, timeout=60.0, max_retries=1)
+            self._owns_fallback_client = True
         self.http_client = http_client or httpx.AsyncClient(
             timeout=httpx.Timeout(10.0),
             follow_redirects=False,
@@ -104,6 +112,8 @@ class VisionTreasureInspector:
             await self.http_client.aclose()
         if self._owns_openai_client:
             await self.client.close()
+        if self._owns_fallback_client and self.fallback_client is not None:
+            await self.fallback_client.close()
 
     async def download_image(self, image_url: str) -> tuple[str, bytes]:
         host = _validate_image_url(image_url, self.allowed_hosts)
@@ -157,20 +167,27 @@ class VisionTreasureInspector:
                 "visual_authenticity_score und uncertainty_notes als JSON zurück. "
                 "Der Score beschreibt nur die visuelle Plausibilität, keine Echtheitsprüfung."
             )
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {
-                            "url": f"data:{mime_type};base64,{encoded}"
-                        }},
-                    ],
-                }],
-                response_format={"type": "json_object"},
-                temperature=0,
-            )
+            messages = [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {
+                        "url": f"data:{mime_type};base64,{encoded}"
+                    }},
+                ],
+            }]
+            try:
+                response = await self.client.chat.completions.create(
+                    model=self.model, messages=messages,
+                    response_format={"type": "json_object"}, temperature=0,
+                )
+            except Exception:
+                if self.fallback_client is None or not self.fallback_model:
+                    raise
+                response = await self.fallback_client.chat.completions.create(
+                    model=self.fallback_model, messages=messages,
+                    response_format={"type": "json_object"}, temperature=0,
+                )
             raw = response.choices[0].message.content
             if not raw:
                 raise InspectionError("Vision-Modell lieferte keine Analyse.")
