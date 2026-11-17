@@ -12,7 +12,9 @@ import { createConfiguredProviderRegistry } from "./providers/bootstrap.js";
 import type { ProviderRegistry } from "./providers/registry.js";
 
 export interface ServerDependencies {
-  prisma: PrismaClient;\n  /** Server-configured, read-only marketplace providers. */\n  providers?: ProviderRegistry;
+  prisma: PrismaClient;
+  /** Server-configured, read-only marketplace providers. */
+  providers?: ProviderRegistry;
   /** HS256 signing secret for access tokens; unset means the auth routes stay closed. */
   authSigningSecret?: string | undefined;
   now?: () => Date;
@@ -44,7 +46,12 @@ const STATUS_BY_ERROR: Readonly<Record<string, number>> = Object.freeze({
   DEAL_NOT_ELIGIBLE_FOR_REVIEW_APPROVAL: 422,
   DEAL_REVIEW_FIELDS_REQUIRED: 400,
   DEAL_LIST_LIMIT_INVALID: 400,
-  VISION_INSPECTOR_NOT_CONFIGURED: 503,\n  DEAL_SCAN_INPUT_INVALID: 400,\n  DEAL_SCAN_PROVIDER_UNAVAILABLE: 503,\n  DEAL_SCAN_PROVIDER_NOT_FOUND: 404,\n  DEAL_SCAN_PROVIDER_CAPABILITY_UNAVAILABLE: 422,\n  DEAL_SCAN_UPSTREAM_FAILED: 502,
+  VISION_INSPECTOR_NOT_CONFIGURED: 503,
+  DEAL_SCAN_INPUT_INVALID: 400,
+  DEAL_SCAN_PROVIDER_UNAVAILABLE: 503,
+  DEAL_SCAN_PROVIDER_NOT_FOUND: 404,
+  DEAL_SCAN_PROVIDER_CAPABILITY_UNAVAILABLE: 422,
+  DEAL_SCAN_UPSTREAM_FAILED: 502,
   VISION_IMAGE_URL_REQUIRED: 400,
   TREASURE_ANALYSIS_IDEMPOTENCY_REQUIRED: 400,
   TREASURE_ANALYSIS_IDEMPOTENCY_CONFLICT: 409,
@@ -266,7 +273,8 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
       }
     } catch (error) { return fail(reply, error); }
   });
-\n  app.get("/v1/deals", async (request, reply) => {
+
+  app.get("/v1/deals", async (request, reply) => {
     try {
       await principalFrom(request);
       const query = request.query as Record<string, unknown>;
