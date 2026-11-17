@@ -17,7 +17,11 @@ publish:
   modes and credentials in `EXPO_PUBLIC_*`, and fails on any hit. CI runs it on
   every push and pull request (`npm run verify:paper`).
 - The APK build repeats that check before compiling and afterwards asserts that
-  the bundled JavaScript still contains `PAPER`.
+  the bundled JavaScript still carries the marker
+  `AUTONOMAGENT_PAPER_ONLY_BUILD` from `apps/mobile/paperBuild.ts` (one ASCII
+  token, checked in ASCII and UTF-16LE because Hermes encodes non-ASCII strings
+  as UTF-16) and the `PAPER` mode string. The guard fails if the marker in the
+  source, the workflow and the dashboard ever drift apart.
 - No secret is passed to the mobile build. `EXPO_PUBLIC_API_URL` is optional,
   must be `https://`, and is rejected if it looks like a credential.
 
@@ -44,7 +48,7 @@ Each run uploads the artifact `autonomagent-paper-preview-<commit>` containing:
   that the generated project uses for preview releases. It is not a Play Store
   signing key.
 - `build-info.json` — package id, version name/code, SHA-256, size, bundle
-  path, PAPER marker count, baked-in API URL, commit and ABIs.
+  path, PAPER marker hits, baked-in API URL, commit and ABIs.
 
 The job summary additionally shows `apksigner verify --print-certs` output and
 the same fields as a table. Copy the SHA-256 from there when reporting a release.

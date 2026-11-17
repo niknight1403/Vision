@@ -53,6 +53,24 @@ record("expo.extra.liveTradingEnabled", extra.liveTradingEnabled);
 const autopilotSource = readFileSync(join(repoRoot, "packages", "trading-core", "src", "autopilot.ts"), "utf8");
 if (!/^\s*mode: "PAPER";$/m.test(autopilotSource)) fail("trading-core autopilot must declare mode: \"PAPER\"");
 if (!/^\s*liveTradingEnabled: false;$/m.test(autopilotSource)) fail("trading-core autopilot must declare liveTradingEnabled: false");
+// The release pipeline greps the compiled bundle for this marker, so the
+// constant and the workflow literal must not drift apart.
+const markerSource = readFileSync(join(mobileRoot, "paperBuild.ts"), "utf8");
+const markerMatch = markerSource.match(/PAPER_BUILD_MARKER\s*=\s*"([A-Z0-9_]+)"/);
+if (!markerMatch) {
+  fail("paperBuild.ts must export PAPER_BUILD_MARKER");
+} else {
+  const marker = markerMatch[1];
+  const workflowPath = join(repoRoot, ".github", "workflows", "android-preview-apk.yml");
+  if (!readFileSync(workflowPath, "utf8").includes(marker)) {
+    fail(`.github/workflows/android-preview-apk.yml must verify the marker ${marker}`);
+  }
+  if (!readFileSync(join(mobileRoot, "AutopilotDashboard.tsx"), "utf8").includes("PAPER_BUILD_MARKER")) {
+    fail("AutopilotDashboard.tsx must render the PAPER build marker");
+  }
+  record("PAPER build marker", marker);
+}
+
 record("trading-core autopilot mode", /^\s*mode: "PAPER";$/m.test(autopilotSource) ? "PAPER" : "unexpected");
 
 // Anything that would turn live trading on, or that would bake a credential
