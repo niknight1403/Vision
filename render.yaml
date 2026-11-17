@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: vision-api
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: feat/hybrid-ai-mcp-infrastructure
+    dockerContext: .
+    dockerfilePath: services/api/Dockerfile
+    dockerCommand: "npm run start:migrate --workspace @autonomagent/api"
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: autonomagent-vision-db
+          property: connectionString
+      - key: AUTH_SIGNING_SECRET
+        generateValue: true
+      - key: TRADING_MODE
+        value: PAPER
+      - key: LIVE_TRADING_ENABLED
+        value: "false"
+      - key: EMERGENCY_STOP
+        value: "true"

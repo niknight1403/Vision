@@ -1,0 +1,115 @@
+name: vision-stack
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-autonomagent}
+      POSTGRES_USER: ${POSTGRES_USER:-autonomagent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-autonomagent} -d ${POSTGRES_DB:-autonomagent}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - "${REDIS_PASSWORD:?Set REDIS_PASSWORD in infra/.env}"
+    volumes: [redis_data:/data]
+    networks: [backend]
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes: [ollama_data:/root/.ollama]
+    expose: ["11434"]
+    networks: [backend]
+  api:
+    build:
+      context: ..
+      dockerfile: services/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8080"
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-autonomagent}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}@postgres:5432/${POSTGRES_DB:-autonomagent}?schema=public
+      AUTH_SIGNING_SECRET: ${AUTH_SIGNING_SECRET:?Set AUTH_SIGNING_SECRET in infra/.env}
+      VISION_WORKER_URL: http://vision-worker:8091
+      VISION_WORKER_TOKEN: ${VISION_WORKER_TOKEN:?Set VISION_WORKER_TOKEN in infra/.env}
+      AGENT_WORKER_POLL_INTERVAL_MS: "1500"
+    command: ["sh", "-c", "npx prisma migrate deploy --schema services/api/prisma/schema.prisma && npm run start --workspace @autonomagent/api"]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vision-worker:
+        condition: service_started
+    ports:
+      - "${API_BIND_ADDRESS:-127.0.0.1}:8080:8080"
+    networks: [backend]
+
+  agent-worker:
+    build:
+      context: ..
+      dockerfile: services/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-autonomagent}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}@postgres:5432/${POSTGRES_DB:-autonomagent}?schema=public
+      VISION_WORKER_URL: http://vision-worker:8091
+      VISION_WORKER_TOKEN: ${VISION_WORKER_TOKEN:?Set VISION_WORKER_TOKEN in infra/.env}
+      AGENT_WORKER_POLL_INTERVAL_MS: "1500"
+    command: ["npm", "run", "worker", "--workspace", "@autonomagent/api"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    networks: [backend]
+
+  vision-worker:
+    build:
+      context: ../services/vision-worker
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      VISION_WORKER_HOST: 0.0.0.0
+      VISION_WORKER_PORT: "8091"
+      VISION_WORKER_TOKEN: ${VISION_WORKER_TOKEN:?Set VISION_WORKER_TOKEN in infra/.env}
+      VISION_ALLOWED_IMAGE_HOSTS: ${VISION_ALLOWED_IMAGE_HOSTS:?Set exact image host allowlist}
+      LLM_API_KEY: ${LLM_API_KEY:-ollama}
+      LLM_BASE_URL: http://ollama:11434/v1
+      VISION_MODEL: ${VISION_MODEL:-qwen2.5-vl:7b}
+      LLM_FALLBACK_BASE_URL: ${LLM_FALLBACK_BASE_URL:-}
+      LLM_FALLBACK_API_KEY: ${LLM_FALLBACK_API_KEY:-}
+      LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-}
+    depends_on: [ollama]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    expose: ["8091"]
+    networks: [backend]
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:
+networks:
+  # Private services are not published; default bridge egress is required for
+  # model pulls and the explicitly configured cloud fallback.
+  backend:
+    driver: bridge

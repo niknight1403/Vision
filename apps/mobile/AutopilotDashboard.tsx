@@ -6,7 +6,7 @@ import {
 import { StatusBar } from "expo-status-bar";
 import { PAPER_BUILD_GUARDRAILS, PAPER_BUILD_MARKER } from "./paperBuild";
 
-const API_BASE_URL = (process.env.EXPO_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+const API_BASE_URL = (process.env.EXPO_PUBLIC_API_URL || "https://vision-api-pw1k.onrender.com").replace(/\/$/, "");
 
 type Deal = {
   id: string;
