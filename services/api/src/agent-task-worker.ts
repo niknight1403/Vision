@@ -57,7 +57,7 @@ async function claimTask() {
 }
 
 function safeMinor(value: unknown, field: string): number {
-  if (typeof value !== "string" || !/^\\d+$/.test(value)) {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) {
     throw new PermanentTaskError("TASK_INPUT_INVALID_" + field);
   }
   const amount = BigInt(value);
@@ -137,7 +137,7 @@ async function main() {
 main().catch(async (error: unknown) => {
   // Startup/runtime diagnostics are intentionally concise; never print tokens or task input.
   process.stderr.write("Agent task worker stopped: " +
-    (error instanceof Error ? error.message : "unknown error") + "\\n");
+    (error instanceof Error ? error.message : "unknown error") + "\n");
   await prisma.$disconnect();
   process.exitCode = 1;
 });
