@@ -50,6 +50,8 @@ def build_llm_specialists(
     client: AsyncOpenAI,
     *,
     model: str,
+    fallback_client: AsyncOpenAI | None = None,
+    fallback_model: str | None = None,
     market_research: MarketResearch | None = None,
 ):
     """Build specialist callables; market research stays unavailable without real data."""
@@ -72,12 +74,19 @@ def build_llm_specialists(
             "confidence and state what is unknown. Product evidence: "
             + json.dumps(payload, ensure_ascii=False)
         )
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0,
-        )
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            response = await client.chat.completions.create(
+                model=model, messages=messages,
+                response_format={"type": "json_object"}, temperature=0,
+            )
+        except Exception:
+            if fallback_client is None or not fallback_model:
+                raise
+            response = await fallback_client.chat.completions.create(
+                model=fallback_model, messages=messages,
+                response_format={"type": "json_object"}, temperature=0,
+            )
         raw = response.choices[0].message.content
         if not raw:
             raise ValueError("Empty specialist response")
