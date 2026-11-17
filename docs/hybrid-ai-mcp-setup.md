@@ -10,11 +10,11 @@ The Vision worker uses an OpenAI-compatible primary endpoint. In Docker Compose 
 2. Start the stack from the repository root: docker compose --env-file infra/.env -f infra/docker-compose.yml up -d --build
 3. Pull the vision model: docker compose --env-file infra/.env -f infra/docker-compose.yml exec ollama ollama pull qwen2.5-vl:7b
 4. Check containers: docker compose --env-file infra/.env -f infra/docker-compose.yml ps
-5. Run the existing API and task worker using their npm workspace scripts. The Compose backend network is private and does not publish database, Redis, Ollama or worker ports. Use a developer-only override with 127.0.0.1 bindings if host access is required.
+5. The Compose stack builds the API and durable task worker from the repository root. The API applies Prisma migrations before starting; its port binds to 127.0.0.1 by default. Test it with curl http://127.0.0.1:8080/health. For a remote cloud host, set API_BIND_ADDRESS=0.0.0.0 only behind a TLS reverse proxy or platform ingress with firewall restrictions. Database, Redis, Ollama and the Vision worker ports remain unpublished.
 
 ## Cloud setup
 
-Deploy API and worker as separate private services in one private network. Use managed PostgreSQL/Redis or the Compose equivalents. Point the primary model endpoint to a private GPU-backed Ollama host or another OpenAI-compatible provider. Configure the optional cloud fallback as secret environment variables. Keep the Vision worker private, terminate public HTTPS at the API gateway, restrict outbound image-fetch egress, and preserve the exact hostname allowlist.
+Deploy the API as the only public service behind HTTPS ingress; deploy the agent task worker and Vision worker as private services in the same private network. Use managed PostgreSQL/Redis or the Compose equivalents. Point the primary model endpoint to a private GPU-backed Ollama host or another OpenAI-compatible provider. Configure the optional cloud fallback as secret environment variables. Keep worker ports private, restrict outbound image-fetch egress, and preserve the exact hostname allowlist. Set API_BIND_ADDRESS=0.0.0.0 only when a separate ingress/firewall protects the host.
 
 ## MCP client setup
 
