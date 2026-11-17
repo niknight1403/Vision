@@ -6,5 +6,9 @@
     "declarationMap": false,
     "rootDir": "./src",
     "outDir": "./dist"
-  }
+  },
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.spec.ts"
+  ]
 }
