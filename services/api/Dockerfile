@@ -1,5 +1,8 @@
 FROM node:22-bookworm-slim
 ENV NODE_ENV=production
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates openssl \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /workspace
 COPY package.json package-lock.json ./
 COPY apps/mobile/package.json apps/mobile/package.json
