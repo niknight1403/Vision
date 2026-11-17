@@ -120,3 +120,70 @@ async def test_failed_specialist_is_visible_and_never_claims_ready():
     assert failed.status == "FAILED"
     assert "secret provider token" not in failed.model_dump_json()
     assert result.status == "RESEARCH_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_resume_skips_successful_specialists_and_persists_new_findings():
+    calls = {role: 0 for role in SpecialistRole}
+    persisted = []
+
+    async def adapter(role):
+        async def run(_brief):
+            calls[role] += 1
+            return finding(role)
+        return run
+
+    completed = finding(SpecialistRole.VISUAL)
+    checkpoint = {
+        "schema_version": 1,
+        "findings": {
+            SpecialistRole.VISUAL.value: completed.model_dump(mode="json"),
+        },
+    }
+
+    async def save(item):
+        persisted.append(item)
+
+    swarm = HiddenTreasureSwarm({
+        role: await adapter(role) for role in SpecialistRole
+    })
+    result = await swarm.analyze(
+        ProductBrief(
+            candidate_id="candidate-resume",
+            title="Checkpointed collectible",
+            asking_price_minor=2500,
+        ),
+        checkpoint=checkpoint,
+        on_finding=save,
+    )
+
+    assert calls[SpecialistRole.VISUAL] == 0
+    assert all(calls[role] == 1 for role in SpecialistRole if role != SpecialistRole.VISUAL)
+    assert len(persisted) == 5
+    assert len(result.findings) == 6
+    assert result.findings[0].role == SpecialistRole.VISUAL
+    assert result.purchase_authorized is False
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_persistence_failure_aborts_analysis():
+    async def adapter(role):
+        async def run(_brief):
+            return finding(role)
+        return run
+
+    async def fail_save(_item):
+        raise RuntimeError("TASK_LEASE_LOST")
+
+    swarm = HiddenTreasureSwarm({
+        role: await adapter(role) for role in SpecialistRole
+    })
+    with pytest.raises(RuntimeError, match="TASK_LEASE_LOST"):
+        await swarm.analyze(
+            ProductBrief(
+                candidate_id="candidate-lease-loss",
+                title="Lease protected item",
+                asking_price_minor=1000,
+            ),
+            on_finding=fail_save,
+        )
