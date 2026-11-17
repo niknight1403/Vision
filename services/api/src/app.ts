@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import helmet from "@fastify/helmet";
 import cors from "@fastify/cors";
@@ -7,6 +7,7 @@ import { config } from "./config.js";
 import { authenticateBearerToken, requireAdmin, type AuthenticatedPrincipal } from "./auth-service.js";
 import { loginWithPassword, revokeRefreshToken, rotateRefreshToken } from "./auth-session-service.js";
 import { listDealCandidates, reviewDealCandidate } from "./deal-candidate-service.js";
+import { saveTaskCheckpoint } from "./agent-task-service.js";
 
 export interface ServerDependencies {
   prisma: PrismaClient;
@@ -47,6 +48,7 @@ const STATUS_BY_ERROR: Readonly<Record<string, number>> = Object.freeze({
   TREASURE_ANALYSIS_IDEMPOTENCY_CONFLICT: 409,
   TREASURE_ANALYSIS_INPUT_INVALID: 400,
   AGENT_TASK_NOT_FOUND: 404,
+  TASK_LEASE_LOST: 409,
 });
 
 /** BigInt cents and Date values are normalised so the payload stays JSON-safe. */
@@ -109,6 +111,42 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
       Math.floor(now().getTime() / 1000),
     );
   }
+
+  app.post("/internal/agent-tasks/:taskId/checkpoint", async (request, reply) => {
+    const expectedToken = process.env.VISION_WORKER_TOKEN ?? "";
+    const authorization = request.headers.authorization ?? "";
+    const suppliedToken = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+    const expected = Buffer.from(expectedToken);
+    const supplied = Buffer.from(suppliedToken);
+    if (expected.length < 32 || supplied.length !== expected.length ||
+        !timingSafeEqual(supplied, expected)) {
+      return reply.code(401).send({ error: "WORKER_AUTH_REQUIRED" });
+    }
+    try {
+      const { taskId } = request.params as { taskId: string };
+      const body = request.body as { workerId?: unknown; checkpoint?: unknown } | undefined;
+      if (typeof body?.workerId !== "string" || !body.workerId.trim() ||
+          !body.checkpoint || typeof body.checkpoint !== "object" ||
+          Array.isArray(body.checkpoint)) {
+        return reply.code(400).send({ error: "TASK_CHECKPOINT_INVALID" });
+      }
+      const checkpoint = body.checkpoint as Record<string, unknown>;
+      const findings = checkpoint.findings;
+      const allowedRoles = ["visual_identification", "market_research", "collector_rarity",
+        "technical_parts", "restoration", "risk_authenticity"];
+      if (checkpoint.schema_version !== 1 || !findings || typeof findings !== "object" ||
+          Array.isArray(findings) || Object.keys(findings).length > 6 ||
+          Object.keys(findings).some((role) => !allowedRoles.includes(role))) {
+        return reply.code(400).send({ error: "TASK_CHECKPOINT_INVALID" });
+      }
+      const saved = await saveTaskCheckpoint(
+        prisma, taskId, body.workerId, checkpoint as Prisma.InputJsonObject,
+      );
+      return reply.code(200).send({ taskId: saved.id, checkpointed: true });
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
 
   app.get("/health", async () => ({
     status: "ok",
