@@ -96,7 +96,7 @@ async def analyze(
         fallback_model=inspector.fallback_model,
     )
     swarm = HiddenTreasureSwarm(specialists, concurrency=6, timeout_seconds=45)
-    checkpoint = request.checkpoint
+    checkpoint_state = dict(request.checkpoint or {"schema_version": 1, "findings": {}})
     checkpoint_lock = asyncio.Lock()
 
     async def persist_finding(finding) -> None:
@@ -106,7 +106,7 @@ async def analyze(
         if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
             raise RuntimeError("CHECKPOINT_CALLBACK_URL_INVALID")
         async with checkpoint_lock:
-            current = dict(checkpoint or {"schema_version": 1, "findings": {}})
+            current = dict(checkpoint_state)
             findings = dict(current.get("findings", {}))
             findings[finding.role.value] = finding.model_dump(mode="json")
             current = {"schema_version": 1, "findings": findings}
@@ -116,11 +116,12 @@ async def analyze(
                 headers={"authorization": "Bearer " + app.state.worker_token},
             )
             response.raise_for_status()
-            checkpoint = current
+            checkpoint_state.clear()
+            checkpoint_state.update(current)
 
     assessment = await swarm.analyze(
         brief,
-        checkpoint=checkpoint,
+        checkpoint=checkpoint_state,
         on_finding=persist_finding if request.checkpoint_callback_url else None,
     )
     return {
