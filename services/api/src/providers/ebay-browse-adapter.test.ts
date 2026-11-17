@@ -42,7 +42,7 @@ describe("eBay Browse adapter", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify(tokenPayload), {
         status: 200, headers: { "content-type": "application/json" },
       }))
-      .mockResolvedValue(new Response(JSON.stringify({ itemSummaries: [] }), {
+      .mockImplementation(async () => new Response(JSON.stringify({ itemSummaries: [] }), {
         status: 200, headers: { "content-type": "application/json" },
       }));
     vi.stubGlobal("fetch", fetchMock);
@@ -57,7 +57,7 @@ describe("eBay Browse adapter", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify(tokenPayload), {
         status: 200, headers: { "content-type": "application/json" },
       }))
-      .mockResolvedValue(new Response(JSON.stringify({ itemSummaries: [{
+      .mockImplementation(async () => new Response(JSON.stringify({ itemSummaries: [{
         itemId: "1", title: "Item", itemWebUrl: "https://ebay.com.attacker.example/item",
         price: { value: "10.00", currency: "EUR" },
       }] }), { status: 200, headers: { "content-type": "application/json" } }));
