@@ -98,3 +98,12 @@ jobs:
           path: /tmp/autonomagent-android-export/
           if-no-files-found: error
           retention-days: 14
+
+  api-docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Build API container (no push)
+        run: docker build --file services/api/Dockerfile --tag autonomagent-api:ci .
