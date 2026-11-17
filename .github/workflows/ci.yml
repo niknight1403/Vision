@@ -55,11 +55,14 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: "22.13.1"
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install from lockfile
         run: npm ci
+      - name: Validate Expo dependency compatibility
+        working-directory: apps/mobile
+        run: npx expo-doctor
       - name: Generate Prisma Client
         run: npx prisma generate --schema services/api/prisma/schema.prisma
       - name: Validate schema and apply migrations

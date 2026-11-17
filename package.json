@@ -15,11 +15,12 @@
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0"
   },
   "overrides": {
     "deepmerge-ts": "^8.0.0",
     "image-size": "^2.0.3",
-    "postcss": "^8.5.23"
+    "postcss": "^8.5.23",
+    "react-native": "0.81.5"
   }
 }
