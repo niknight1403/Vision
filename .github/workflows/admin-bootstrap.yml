@@ -1,0 +1,43 @@
+name: Initial administrator bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_email:
+        description: "Type niko.oeben@gmail.com to confirm the target account"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vision-admin-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    if: ${{ inputs.confirm_email == 'niko.oeben@gmail.com' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.VISION_DATABASE_URL }}
+      ADMIN_BOOTSTRAP_EMAIL: niko.oeben@gmail.com
+      ADMIN_BOOTSTRAP_PASSWORD: ${{ secrets.VISION_ADMIN_BOOTSTRAP_PASSWORD }}
+    steps:
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          test -n "$DATABASE_URL" || { echo "Missing VISION_DATABASE_URL secret"; exit 1; }
+          test -n "$ADMIN_BOOTSTRAP_PASSWORD" || { echo "Missing VISION_ADMIN_BOOTSTRAP_PASSWORD secret"; exit 1; }
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Apply database migrations
+        run: npx prisma migrate deploy --schema services/api/prisma/schema.prisma
+      - name: Create the approved initial administrator
+        run: npm run admin:bootstrap --workspace @autonomagent/api
