@@ -4,6 +4,18 @@
 
 The Vision worker uses an OpenAI-compatible primary endpoint. In Docker Compose this is local Ollama at http://ollama:11434/v1. If that request fails, a cloud fallback is attempted only when all three settings are present: LLM_FALLBACK_BASE_URL, LLM_FALLBACK_API_KEY and LLM_FALLBACK_MODEL. Both providers must support image input and JSON response mode. Provider secrets remain server-side and must never be placed in Expo public variables.
 
+## Initial administrator
+
+The approved initial administrator is niko.oeben@gmail.com. The bootstrap command creates this account with role ADMIN and a salted scrypt password hash; it never stores or prints the password.
+
+1. Set ADMIN_BOOTSTRAP_EMAIL=niko.oeben@gmail.com and a unique ADMIN_BOOTSTRAP_PASSWORD (16-128 UTF-8 bytes) in the server's secret environment. Do not commit the password or put it in Android/Expo variables.
+2. Apply database migrations first.
+3. Run once from the repository root: npm run admin:bootstrap --workspace @autonomagent/api
+4. Sign in through POST /v1/auth/login using that email and the configured password.
+5. Remove ADMIN_BOOTSTRAP_PASSWORD from the runtime environment after successful creation.
+
+The command is allowlisted to this exact email. It is idempotent for an already active ADMIN account, but fails closed if an account with that email already exists as a non-admin or disabled user; that case requires manual database review. The bootstrap has to be run against the target database before the account can sign in.
+
 ## Local setup
 
 1. Copy infra/.env.example to infra/.env and replace every placeholder with strong random secrets.
