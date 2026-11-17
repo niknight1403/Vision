@@ -15,11 +15,6 @@ const token = process.env.VISION_WORKER_TOKEN;
 const pollMs = Number(process.env.AGENT_WORKER_POLL_INTERVAL_MS ?? "1500");
 const leaseSeconds = 180;
 const requestTimeoutMs = 90_000;
-const apiBaseUrl = new URL(process.env.API_BASE_URL ?? "http://api:8080");
-if (apiBaseUrl.protocol !== "https:" && apiBaseUrl.protocol !== "http:") {
-  throw new Error("API_BASE_URL must use HTTP or HTTPS");
-}
-
 if (!endpoint || !token || token.length < 32) {
   throw new Error("VISION_WORKER_URL and a 32-character VISION_WORKER_TOKEN are required");
 }
