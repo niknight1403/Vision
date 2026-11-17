@@ -1,0 +1,21 @@
+# Dependabot configuration.
+#
+# The repository was running with Dependabot defaults, so only security update
+# jobs were created (no version-update PRs). That is kept here explicitly with
+# open-pull-requests-limit: 0.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    ignore:
+      # GHSA-g3hv-75wg-m249 (moderate, DoS via globparts amplification) is only
+      # fixed in minimatch >= 11.0.1, but the single copy in this monorepo is
+      # pulled in by glob inside the Expo CLI toolchain, which requires
+      # minimatch < 11. Dependabot can therefore not open a usable security PR
+      # and fails the update job every day.
+      # Remove this rule once Expo ships a glob version that accepts
+      # minimatch >= 11.0.1.
+      - dependency-name: minimatch
