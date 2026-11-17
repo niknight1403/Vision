@@ -9,7 +9,8 @@
     "start": "node dist/services/api/src/server.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run src",
-    "worker": "tsx src/agent-task-worker.ts"
+    "worker": "tsx src/agent-task-worker.ts",
+    "admin:bootstrap": "tsx src/admin-bootstrap.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.1",
