@@ -82,6 +82,8 @@ jobs:
         run: |
           npx prisma validate --schema services/api/prisma/schema.prisma
           npx prisma migrate deploy --schema services/api/prisma/schema.prisma
+      - name: Build trading-core workspace package
+        run: npm run build --workspace @autonomagent/trading-core
       - name: Build API
         run: npm run build --workspace @autonomagent/api
       - name: Typecheck all workspaces

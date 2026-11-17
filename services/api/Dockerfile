@@ -13,7 +13,10 @@ COPY packages/trading-core/package.json packages/trading-core/package.json
 # production-only omit behavior when NODE_ENV=production.
 RUN npm ci --include=dev
 COPY . .
-RUN npx prisma generate --schema services/api/prisma/schema.prisma \
+# The API and worker consume trading-core through its workspace package entrypoint.
+# Emit real ESM JS + declarations before compiling the API against that package.
+RUN npm run build --workspace @autonomagent/trading-core \
+    && npx prisma generate --schema services/api/prisma/schema.prisma \
     && npm run build --workspace @autonomagent/api
 WORKDIR /workspace
 CMD ["npm", "run", "start:migrate", "--workspace", "@autonomagent/api"]
