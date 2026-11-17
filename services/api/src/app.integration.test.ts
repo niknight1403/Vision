@@ -171,7 +171,32 @@ suite("authenticated deal review routes (RBAC)", () => {
     const response = await app.inject({
       method: "POST", url: "/v1/deals/scan",
       headers: { authorization: "Bearer " + admin.accessToken },
-      payload: { providerId: "missing-market", query: "camera" },
+      payload: {
+        providerId: "missing-market",
+        query: "camera",
+        limit: 5,
+        currency: "EUR",
+        costs: {
+          inboundShippingCents: "500",
+          outboundShippingCents: "500",
+          marketplaceFeeCents: "500",
+          paymentFeeCents: "100",
+          packagingCents: "100",
+          riskReserveCents: "100",
+        },
+        context: {
+          resalePriceCents: "12000",
+          openTrades: 0,
+          dailyLossCents: "0",
+          riskLimits: {
+            maxTradeCents: "20000",
+            maxOpenTrades: 5,
+            maxDailyLossCents: "50000",
+            minProfitCents: "1000",
+            minRoiBasisPoints: "1000",
+          },
+        },
+      },
     });
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual({ error: "DEAL_SCAN_PROVIDER_NOT_FOUND" });
