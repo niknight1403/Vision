@@ -7,6 +7,7 @@ services:
     branch: feat/hybrid-ai-mcp-infrastructure
     dockerContext: .
     dockerfilePath: services/api/Dockerfile
+    dockerCommand: "npm run start:migrate --workspace @autonomagent/api"
     healthCheckPath: /health
     autoDeploy: true
     envVars:
