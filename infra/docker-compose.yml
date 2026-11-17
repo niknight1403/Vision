@@ -50,5 +50,7 @@ volumes:
   redis_data:
   ollama_data:
 networks:
+  # Private services are not published; default bridge egress is required for
+  # model pulls and the explicitly configured cloud fallback.
   backend:
-    internal: true
+    driver: bridge
