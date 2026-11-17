@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}
     volumes: [postgres_data:/var/lib/postgresql/data]
     healthcheck:
-      test: [CMD-SHELL, pg_isready -U ${POSTGRES_USER:-autonomagent} -d ${POSTGRES_DB:-autonomagent}]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-autonomagent} -d ${POSTGRES_DB:-autonomagent}"]
       interval: 5s
       timeout: 3s
       retries: 20
