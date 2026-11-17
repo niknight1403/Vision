@@ -120,13 +120,27 @@ jobs:
             exit 1
           fi
 
-          # The JS bundle inside the APK must still be the PAPER build.
+          # The compiled bundle must still carry the PAPER marker. Hermes stores
+          # strings that contain non-ASCII characters as UTF-16LE, so both
+          # encodings are checked.
           BUNDLE=$(unzip -Z1 "$APK" | grep -E 'index\.android\.bundle$' | head -1)
           if [ -z "$BUNDLE" ]; then echo "no JS bundle inside the APK" >&2; exit 1; fi
           unzip -p "$APK" "$BUNDLE" > /tmp/index.android.bundle
-          PAPER_HITS=$(grep -a -c "PAPER" /tmp/index.android.bundle || true)
-          if [ "$PAPER_HITS" -lt 1 ]; then
-            echo "the JS bundle does not mention PAPER; refusing this build" >&2
+
+          MARKER_HITS=$(python3 - <<'PY'
+          import sys
+          data = open("/tmp/index.android.bundle", "rb").read()
+          marker = b"AUTONOMAGENT_PAPER_ONLY_BUILD"
+          hits = data.count(marker) + data.count(marker.decode().encode("utf-16-le"))
+          paper = data.count(b"PAPER") + data.count("PAPER".encode("utf-16-le"))
+          print(f"{hits} {paper}")
+          PY
+          )
+          MARKER_COUNT=${MARKER_HITS%% *}
+          PAPER_COUNT=${MARKER_HITS##* }
+          echo "PAPER marker hits: $MARKER_COUNT, PAPER string hits: $PAPER_COUNT"
+          if [ "$MARKER_COUNT" -lt 1 ] || [ "$PAPER_COUNT" -lt 1 ]; then
+            echo "the bundle is missing the PAPER marker ($MARKER_COUNT) or PAPER ($PAPER_COUNT); refusing this build" >&2
             exit 1
           fi
 
@@ -141,11 +155,12 @@ jobs:
             --arg sha256 "$SHA256" \
             --argjson sizeBytes "$SIZE" \
             --arg bundle "$BUNDLE" \
-            --argjson paperMarkers "$PAPER_HITS" \
+            --argjson markerHits "$MARKER_COUNT" \
+            --argjson paperHits "$PAPER_COUNT" \
             --arg apiUrl "$EXPO_PUBLIC_API_URL" \
             --arg commit "$GITHUB_SHA" \
             --arg architectures "$ARCHITECTURES" \
-            '{package: $package, versionName: $versionName, versionCode: $versionCode, sha256: $sha256, sizeBytes: $sizeBytes, bundle: $bundle, paperMarkers: $paperMarkers, apiUrl: $apiUrl, commit: $commit, architectures: $architectures, tradingMode: "PAPER", liveTradingEnabled: false}' \
+            '{package: $package, versionName: $versionName, versionCode: $versionCode, sha256: $sha256, sizeBytes: $sizeBytes, bundle: $bundle, paperMarkerHits: $markerHits, paperStringHits: $paperHits, apiUrl: $apiUrl, commit: $commit, architectures: $architectures, tradingMode: "PAPER", liveTradingEnabled: false}' \
             > build-info.json
 
           {
@@ -158,7 +173,7 @@ jobs:
             echo "| APK size | $SIZE bytes |"
             echo "| SHA-256 | \`$SHA256\` |"
             echo "| Bundle | \`$BUNDLE\` |"
-            echo "| PAPER markers in bundle | $PAPER_HITS |"
+            echo "| PAPER marker hits | $MARKER_COUNT |"
             echo "| Backend URL | \`${EXPO_PUBLIC_API_URL:-(none)}\` |"
             echo "| ABIs | \`$ARCHITECTURES\` |"
             echo "| Commit | \`$GITHUB_SHA\` |"

@@ -4,6 +4,7 @@ import {
   Text, TextInput, View,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
+import { PAPER_BUILD_GUARDRAILS, PAPER_BUILD_MARKER } from "./paperBuild";
 
 const API_BASE_URL = (process.env.EXPO_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
@@ -237,8 +238,8 @@ export default function AutopilotDashboard() {
         <Text style={styles.eyebrow}>AUTONOMAGENT / VISION SWARM</Text>
         <Text style={styles.heading}>Verborgene Schätze</Text>
         <Text style={styles.intro}>Spezialisten prüfen unscheinbare Produkte auf Modellhinweise, Sammlerwert, Ersatzteile, Restaurierung und Risiken.</Text>
-        <View style={styles.safetyBanner}>
-          <Text style={styles.safetyTitle}>PAPER-MODUS · KEINE KÄUFE</Text>
+        <View style={styles.safetyBanner} testID={PAPER_BUILD_MARKER}>
+          <Text style={styles.safetyTitle}>{PAPER_BUILD_GUARDRAILS.tradingMode}-MODUS · KEINE KÄUFE</Text>
           <Text style={styles.muted}>Analysen und Fundbewertungen – keine automatischen Gebote, Nachrichten oder Zahlungen.</Text>
         </View>
 
