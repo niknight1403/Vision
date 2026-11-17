@@ -1,0 +1,1 @@
+"""AutonomAgent visual inspection worker."""

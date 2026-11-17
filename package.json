@@ -1,0 +1,25 @@
+{
+  "name": "autonomagent",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Android-first controlled product arbitrage workspace",
+  "workspaces": [
+    "apps/mobile",
+    "services/api",
+    "packages/trading-core"
+  ],
+  "scripts": {
+    "mobile": "npm run start --workspace @autonomagent/mobile",
+    "android": "npm run android --workspace @autonomagent/mobile",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "overrides": {
+    "deepmerge-ts": "^8.0.0",
+    "image-size": "^2.0.3",
+    "postcss": "^8.5.23"
+  }
+}
