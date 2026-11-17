@@ -5,7 +5,7 @@ import {
   createListingDraft,
   planDemoReach,
   runDemoAutopilot,
-} from "./autopilot";
+} from "./autopilot.js";
 
 describe("safe demo autopilot", () => {
   it("uses the real integer-cent profit and risk primitives", () => {
