@@ -63,6 +63,29 @@ npm run prebuild:android
 cd android && ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a
 ```
 
+## Verified builds
+
+| Field | Preview build 2026-11-17 |
+| --- | --- |
+| Workflow run | [44068390911](https://github.com/niknight1403/Vision/actions/runs/44068390911) (success) |
+| Commit | `b331f35df3a14df9f9e6b2eb326b9510007174e6` |
+| Artifact | `autonomagent-paper-preview-b331f35df3a1` (retained 30 days) |
+| Package / version | `com.autonomagent.trader` / `0.3.0` (code 3) |
+| ABIs | `arm64-v8a` |
+| Size | 20 580 305 bytes |
+| SHA-256 | `748c5535f6f36bae92ef9be6e96a169300601fb2160a3cf877d10b65fe447d40` |
+| Signature | APK Signature Scheme v2, certificate `CN=Android Debug` |
+| PAPER checks | marker `AUTONOMAGENT_PAPER_ONLY_BUILD` 1 hit, `PAPER` 3 hits |
+| Baked-in API URL | none |
+
+The downloaded artifact was re-verified outside CI: the APK hash matches
+`build-info.json`, the ZIP is intact (597 entries), `AndroidManifest.xml` declares
+`com.autonomagent.trader`, versionName `0.3.0` and `android.permission.INTERNET`,
+and the bundle inside the APK still carries the marker.
+
+Device verification for this build is still open, so no GitHub pre-release exists
+yet.
+
 ## Device verification (still manual)
 
 The build proves that the artifact is well formed and PAPER-only; it cannot
