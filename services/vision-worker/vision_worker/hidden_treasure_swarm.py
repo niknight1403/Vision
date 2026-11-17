@@ -117,7 +117,6 @@ class HiddenTreasureSwarm:
                 )
             if finding.role != role:
                 raise ValueError("Specialist adapter returned a mismatched role")
-            return finding
         except Exception:
             # Keep provider secrets and internal exception details out of results.
             finding = SpecialistFinding(
