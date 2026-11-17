@@ -63,7 +63,7 @@ function parseItem(value: unknown, currency: string, observedAt: string): Provid
   }
   let url: URL;
   try { url = new URL(itemWebUrl); } catch { throw new Error("EBAY_RESPONSE_INVALID_ITEM_URL"); }
-  if (url.protocol !== "https:" || !/(^|\.)ebay\.[a-z.]+$/i.test(url.hostname)) {
+  if (url.protocol !== "https:" || !/^(?:[a-z0-9-]+\.)*ebay\.(?:[a-z]{2,3}|co\.[a-z]{2})$/i.test(url.hostname)) {
     throw new Error("EBAY_RESPONSE_INVALID_ITEM_URL");
   }
   return {
