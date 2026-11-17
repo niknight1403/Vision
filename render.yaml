@@ -7,7 +7,6 @@ services:
     branch: feat/hybrid-ai-mcp-infrastructure
     dockerContext: .
     dockerfilePath: services/api/Dockerfile
-    dockerCommand: "sh -c 'npx prisma migrate deploy --schema services/api/prisma/schema.prisma && npm run start --workspace @autonomagent/api'"
     healthCheckPath: /health
     autoDeploy: true
     envVars:
