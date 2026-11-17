@@ -68,5 +68,7 @@ async def test_llm_specialist_does_not_call_cloud_without_configured_fallback():
     result = await adapters[SpecialistRole.COLLECTOR](ProductBrief(
         candidate_id="no-fallback", title="Vintage camera", asking_price_minor=5000,
     ))
-    # Adapter exceptions are translated to FAILED by the swarm orchestrator.
-    # This direct adapter call intentionally propagates the provider failure.
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        await adapters[SpecialistRole.COLLECTOR](ProductBrief(
+            candidate_id="no-fallback", title="Vintage camera", asking_price_minor=5000,
+        ))
