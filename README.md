@@ -10,7 +10,7 @@ AutonomAgent is an Android-first, Expo/React Native TypeScript workspace for res
 - **Financial figures:** demo values are labelled; no simulated value is represented as realized revenue
 - **Secrets:** provider credentials belong on the server, never in the mobile app or `EXPO_PUBLIC_*`
 
-This repository contains a working Vision analysis code path, but it is not yet a deployed production service. Marketplace sold-data integration, verified marketplace checkout, settlement, Android APK signing/distribution, and production deployment evidence are not included.
+This repository contains a working Vision analysis code path, but it is not yet a deployed production service. Marketplace sold-data integration, verified marketplace checkout, settlement, Play Store signing/distribution, and production deployment evidence are not included. A reproducible PAPER-only preview APK is produced by the `Android preview APK (PAPER only)` workflow; see [docs/android-preview-apk.md](docs/android-preview-apk.md).
 
 ## Vision specialist swarm
 
@@ -61,6 +61,12 @@ npm run mobile
 ```
 
 The mobile shell is designed to make the disconnected/demo state explicit. It does not execute real trades.
+
+The PAPER guard that every CI run and the APK build executes can be called directly:
+
+```bash
+npm run verify:paper --workspace @autonomagent/mobile
+```
 
 ## Safety gates before any live use
 

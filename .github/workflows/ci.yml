@@ -63,6 +63,9 @@ jobs:
       - name: Validate Expo dependency compatibility
         working-directory: apps/mobile
         run: npx expo-doctor
+      - name: Enforce the PAPER trading lockdown
+        working-directory: apps/mobile
+        run: npm run verify:paper
       - name: Generate Prisma Client
         run: npx prisma generate --schema services/api/prisma/schema.prisma
       - name: Validate schema and apply migrations
