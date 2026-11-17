@@ -84,3 +84,12 @@ The current client expects an ADMIN account for enqueueing. A VIEWER or OPERATOR
 ## Release readiness
 
 A green CI run verifies code, Prisma migrations, API tests, Python tests, dependency audit, and the Expo Android JavaScript export. It does not create a signed APK/AAB, provision production secrets, deploy the API/database/worker, configure an approved marketplace sold-data provider, or publish a production release. Those remain separate deployment and distribution gates.
+
+
+## Durable specialist checkpoints
+
+The task worker forwards the task's stored checkpoint to the private Vision service and supplies an authenticated callback URL for the API. After each specialist finishes, the Vision service serializes checkpoint writes and posts the complete versioned finding map to the API. The API accepts these writes only with the shared `VISION_WORKER_TOKEN` and only while the supplied worker ID still owns an unexpired task lease. A stale worker therefore cannot overwrite a newer attempt.
+
+Checkpoint schema version 1 stores findings keyed by the six specialist role names. On retry, only validated `SUCCEEDED` findings are reused; `FAILED` and `SKIPPED` findings are executed again. Persistence failure (including lease loss) aborts the analysis rather than returning an apparently complete result. The worker uses `API_BASE_URL` for the callback destination (defaults to `http://api:8080` on the private Compose network). The API process must have the same `VISION_WORKER_TOKEN` configured as the task dispatcher and Vision service.
+
+This does not authorize purchases. A completed assessment remains subject to admin review, and the purchase-authorized flag remains false.
