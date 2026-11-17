@@ -84,7 +84,12 @@ async def analyze(
         currency=request.currency.upper(),
         image_observations=observations,
     )
-    specialists = build_llm_specialists(inspector.client, model=inspector.model)
+    specialists = build_llm_specialists(
+        inspector.client,
+        model=inspector.model,
+        fallback_client=inspector.fallback_client,
+        fallback_model=inspector.fallback_model,
+    )
     swarm = HiddenTreasureSwarm(specialists, concurrency=6, timeout_seconds=45)
     assessment = await swarm.analyze(brief)
     return {
