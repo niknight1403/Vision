@@ -17,7 +17,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: [redis-server, --appendonly, "yes", --requirepass, ${REDIS_PASSWORD:?Set REDIS_PASSWORD in infra/.env}]
+    command:\n      - redis-server\n      - --appendonly\n      - "yes"\n      - --requirepass\n      - "${REDIS_PASSWORD:?Set REDIS_PASSWORD in infra/.env}"
     volumes: [redis_data:/data]
     networks: [backend]
   ollama:
