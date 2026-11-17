@@ -8,6 +8,13 @@ name: Android preview APK (PAPER only)
 # on every push. Nothing here publishes a release or touches trading state.
 
 on:
+  pull_request:
+    paths:
+      - 'apps/mobile/**'
+      - 'packages/trading-core/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/android-preview-apk.yml'
   workflow_dispatch:
     inputs:
       api_url:
