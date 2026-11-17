@@ -138,7 +138,9 @@ These are internal service primitives only. No login, refresh, logout, or deal-r
 | `POST /v1/auth/login` | public | Issues an HS256 access token (15 min) plus a rotating refresh token (30 days) |
 | `POST /v1/auth/refresh` | refresh token | One-time rotation; reuse of a rotated token returns 401 |
 | `POST /v1/auth/logout` | refresh token | Revokes the presented refresh session, 204 |
-| `GET /v1/providers` | any authenticated role | Configured read-only providers and capabilities; no secrets |\n| `POST /v1/deals/scan` | ADMIN only | Explicit provider search + estimate/risk calculation + persisted candidates; EUR only; 30-second timeout |\n| `GET /v1/deals` | any authenticated role | Review queue with `reviewStatus`, `riskPassed` and `limit` (1..100) filters |
+| `GET /v1/providers` | any authenticated role | Configured read-only providers and capabilities; no secrets |
+| `POST /v1/deals/scan` | ADMIN only | Explicit provider search + estimate/risk calculation + persisted candidates; EUR only; 30-second timeout |
+| `GET /v1/deals` | any authenticated role | Review queue with `reviewStatus`, `riskPassed` and `limit` (1..100) filters |
 | `POST /v1/deals/:dealId/review` | ADMIN only | `APPROVED`, `REJECTED` or `ARCHIVED`; 422 for simulated or risk-failing approval, 409 on a concurrent or repeated decision |
 
 Access control is enforced per request: `authenticateBearerToken` verifies the signature and then reloads the user's role and `disabledAt` from PostgreSQL, so a role change or a disabled account takes effect without waiting for the token to expire. Cent amounts are serialized as strings to keep them JSON-safe.
