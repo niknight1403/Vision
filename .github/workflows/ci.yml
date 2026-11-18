@@ -68,8 +68,12 @@ jobs:
           VISION_ALLOWED_IMAGE_HOSTS: images.example.com
           AUTH_SIGNING_SECRET: ci-auth-signing-secret-not-a-secret
         run: docker compose -f infra/docker-compose.yml config --quiet
-      - name: Build API Docker image
-        run: docker build --file services/api/Dockerfile --tag vision-api:ci .
+      - name: Build minimal API runtime image
+        run: |
+          docker build --file services/api/Dockerfile --target runtime --tag vision-api:ci .
+          bash scripts/assert-api-runtime-image.sh vision-api:ci
+      - name: Build dedicated migration image
+        run: docker build --file services/api/Dockerfile --target migrate --tag vision-migrate:ci .
       - name: Validate Expo dependency compatibility
         working-directory: apps/mobile
         run: npx expo-doctor
