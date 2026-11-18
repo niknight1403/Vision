@@ -44,11 +44,21 @@ type Assessment = {
   next_actions: string[];
   purchase_authorized: boolean;
 };
+type AgentNetworkReview = {
+  status: "REVIEWED" | "COORDINATOR_UNAVAILABLE";
+  consensus: "HIGH" | "MEDIUM" | "LOW";
+  summary: string;
+  unresolved_conflicts: string[];
+  evidence_gaps: string[];
+  recommended_next_steps: string[];
+  confidence: number;
+};
 type Task = {
   taskId: string;
   status: string;
   result?: {
     assessment?: Assessment;
+    agent_network?: AgentNetworkReview;
     visual_inspection?: {
       identified?: boolean;
       exact_model?: string;
@@ -98,6 +108,7 @@ function ActionButton({ title, onPress, disabled = false }: {
 function TaskResult({ task }: { task: Task }) {
   const assessment = task.result?.assessment;
   const visual = task.result?.visual_inspection;
+  const network = task.result?.agent_network;
   return (
     <Panel>
       <View style={styles.rowBetween}>
@@ -138,6 +149,30 @@ function TaskResult({ task }: { task: Task }) {
       ) : task.status === "QUEUED" || task.status === "RUNNING" ? (
         <View style={styles.progress}><ActivityIndicator color="#8DB5FF" /><Text style={styles.bodyText}>Spezialisten analysieren den Fund. Ergebnis wird automatisch aktualisiert.</Text></View>
       ) : <Text style={styles.warning}>Noch kein Analyseergebnis vorhanden. Status und Fehlerprotokoll im Backend prüfen.</Text>}
+      {network && (
+        <View style={styles.networkPanel} accessibilityLabel="Neurales Agentennetzwerk">
+          <View style={styles.rowBetween}>
+            <Text style={styles.itemTitle}>Neurales Agentennetzwerk</Text>
+            <Text style={network.status === "REVIEWED" ? styles.status : styles.warning}>
+              {network.status === "REVIEWED" ? "KOORDINIERT" : "NICHT VERFÜGBAR"}
+            </Text>
+          </View>
+          <Text style={styles.bodyText}>Konsens: {network.consensus} · Konfidenz: {Math.round(network.confidence * 100)}%</Text>
+          <Text style={styles.bodyText}>{network.summary}</Text>
+          {network.unresolved_conflicts.map((item, index) =>
+            <Text key={"conflict-" + index} style={styles.warning}>Offener Konflikt: {item}</Text>
+          )}
+          {network.evidence_gaps.map((item, index) =>
+            <Text key={"gap-" + index} style={styles.muted}>Beleglücke: {item}</Text>
+          )}
+          {network.recommended_next_steps.map((item, index) =>
+            <Text key={"step-" + index} style={styles.bodyText}>Empfohlener Schritt: {item}</Text>
+          )}
+          {network.status === "COORDINATOR_UNAVAILABLE" &&
+            <Text style={styles.warning}>Kein bestätigter Netzwerk-Konsens. Ergebnis bleibt in manueller Prüfung.</Text>
+          }
+        </View>
+      )}
       <Text style={styles.safetyNote}>Keine Echtheitsgarantie · keine Kauf-Freigabe · keine Verkäuferkontaktaufnahme.</Text>
     </Panel>
   );
@@ -267,7 +302,7 @@ export default function AutopilotDashboard() {
                   <Text style={styles.muted}>{deal.riskPassed ? "Regelprüfung bestanden" : "Risiko-Prüfung offen"} · {deal.riskReasons.join(", ")}</Text>
                   <TextInput value={imageUrls[deal.id] ?? ""} onChangeText={(value) => setImageUrls((current) => ({ ...current, [deal.id]: value }))}
                     placeholder="HTTPS-Bildadresse des Produkts" placeholderTextColor="#7183A3" autoCapitalize="none" style={styles.input} />
-                  <ActionButton title={busy ? "Bitte warten …" : "6 Spezialisten analysieren lassen"}
+                  <ActionButton title={busy ? "Bitte warten …" : "6 Spezialisten + Netzwerk-Koordinator"}
                     onPress={() => void startAnalysis(deal)} disabled={busy || !deal.id} />
                   {tasks[deal.id] && <TaskResult task={tasks[deal.id]!} />}
                 </Panel>
@@ -294,6 +329,7 @@ const styles = StyleSheet.create({
   section: { color: "#E8EEFC", fontSize: 18, fontWeight: "800" },
   panel: { backgroundColor: "#121B2C", borderColor: "#293750", borderWidth: 1, borderRadius: 15, padding: 14, gap: 10 },
   subPanel: { backgroundColor: "#0C1422", borderRadius: 10, padding: 10, gap: 4 },
+  networkPanel: { backgroundColor: "#101D31", borderColor: "#3B5D8D", borderWidth: 1, borderRadius: 10, padding: 11, gap: 6 },
   panelTitle: { color: "#F4F7FF", fontSize: 15, fontWeight: "800" },
   itemTitle: { color: "#EDF2FF", fontSize: 15, fontWeight: "800" },
   bodyText: { color: "#B9C6DD", fontSize: 12, lineHeight: 18 },
