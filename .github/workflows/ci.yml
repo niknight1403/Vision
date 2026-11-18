@@ -92,3 +92,55 @@ jobs:
           path: /tmp/autonomagent-android-export/
           if-no-files-found: error
           retention-days: 14
+
+  # The verify job above runs the whole workspace gate against PostgreSQL 16.
+  # This job pins PostgreSQL 15, the version the integration suites were
+  # verified against locally, and fails when the three database suites skip
+  # themselves instead of executing.
+  api-db-integration:
+    name: API DB integration (PostgreSQL 15)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: autonomagent_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d autonomagent_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/autonomagent_test?schema=public
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.1"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install from lockfile
+        run: npm ci
+      - name: Generate Prisma Client
+        run: npx prisma generate --schema services/api/prisma/schema.prisma
+      - name: Validate schema and apply migrations
+        run: |
+          npx prisma validate --schema services/api/prisma/schema.prisma
+          npx prisma migrate deploy --schema services/api/prisma/schema.prisma
+      - name: Run API unit and PostgreSQL 15 integration tests
+        run: npm run test:db --workspace @autonomagent/api
+      - name: Upload API test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autonomagent-api-db-report-${{ github.sha }}
+          path: /tmp/autonomagent-api-db-report.json
+          if-no-files-found: warn
+          retention-days: 14

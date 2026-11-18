@@ -9,6 +9,7 @@
     "start": "node dist/services/api/src/server.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run src",
+    "test:db": "vitest run src --reporter=default --reporter=json --outputFile=/tmp/autonomagent-api-db-report.json && node scripts/verify-db-integration.mjs /tmp/autonomagent-api-db-report.json",
     "worker": "tsx src/agent-task-worker.ts"
   },
   "dependencies": {
