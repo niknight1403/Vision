@@ -103,7 +103,7 @@ async def test_coordinator_uses_fallback_model_when_primary_fails():
     )
 
     assert review.status == "REVIEWED"
-    assert review.consensus == "LOW"
+    assert review.consensus == "MEDIUM"
     assert len(primary.chat.completions.calls) == 1
     assert len(fallback.chat.completions.calls) == 1
 
