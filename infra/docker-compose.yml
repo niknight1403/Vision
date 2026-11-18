@@ -31,10 +31,26 @@ services:
     volumes: [ollama_data:/root/.ollama]
     expose: ["11434"]
     networks: [backend]
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: services/api/Dockerfile
+      target: migrate
+    restart: "no"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-autonomagent}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}@postgres:5432/${POSTGRES_DB:-autonomagent}?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [backend]
+
   api:
     build:
       context: ..
       dockerfile: services/api/Dockerfile
+      target: runtime
     restart: unless-stopped
     environment:
       HOST: 0.0.0.0
@@ -45,16 +61,9 @@ services:
       VISION_WORKER_URL: http://vision-worker:8091
       VISION_WORKER_TOKEN: ${VISION_WORKER_TOKEN:?Set VISION_WORKER_TOKEN in infra/.env}
       AGENT_WORKER_POLL_INTERVAL_MS: "1500"
-    command: ["sh", "-c", "npx prisma migrate deploy --schema services/api/prisma/schema.prisma && npm run start --workspace @autonomagent/api"]
-    healthcheck:
-      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
-      interval: 10s
-      timeout: 3s
-      retries: 12
-      start_period: 20s
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       vision-worker:
         condition: service_started
     ports:
@@ -65,13 +74,15 @@ services:
     build:
       context: ..
       dockerfile: services/api/Dockerfile
+      target: runtime
     restart: unless-stopped
     environment:
+      NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-autonomagent}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}@postgres:5432/${POSTGRES_DB:-autonomagent}?schema=public
       VISION_WORKER_URL: http://vision-worker:8091
       VISION_WORKER_TOKEN: ${VISION_WORKER_TOKEN:?Set VISION_WORKER_TOKEN in infra/.env}
       AGENT_WORKER_POLL_INTERVAL_MS: "1500"
-    command: ["npm", "run", "worker", "--workspace", "@autonomagent/api"]
+    command: ["node", "dist/services/api/src/agent-task-worker.js"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -109,7 +120,5 @@ volumes:
   redis_data:
   ollama_data:
 networks:
-  # Private services are not published; default bridge egress is required for
-  # model pulls and the explicitly configured cloud fallback.
   backend:
     driver: bridge
