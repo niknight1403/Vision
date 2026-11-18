@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .hidden_treasure_swarm import HiddenTreasureSwarm, ProductBrief
 from .llm_specialists import build_llm_specialists
+from .network_coordinator import review_agent_network
 from .vision_identifier import VisionTreasureInspector
 
 
@@ -133,8 +134,19 @@ async def analyze(
         checkpoint=checkpoint_state,
         on_finding=persist_finding if request.checkpoint_task_id else None,
     )
+    # A dedicated coordinator performs cross-agent consensus review. It cannot
+    # modify the evidence-backed valuation or authorize purchases.
+    network_review = await review_agent_network(
+        inspector.client,
+        model=inspector.model,
+        fallback_client=inspector.fallback_client,
+        fallback_model=inspector.fallback_model,
+        brief=brief,
+        assessment=assessment,
+    )
     return {
         "assessment": assessment.model_dump(mode="json"),
+        "agent_network": network_review.model_dump(mode="json"),
         "visual_inspection": visual,
         "purchase_authorized": False,
         "authenticity_verified": False,
