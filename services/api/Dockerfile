@@ -22,8 +22,9 @@ ENV NODE_ENV=production
 CMD ["npx", "prisma", "migrate", "deploy", "--schema", "services/api/prisma/schema.prisma"]
 
 # Install only production dependencies of the API and trading-core workspaces.
-# Omit optional peer packages: Prisma declares its CLI and TypeScript as optional
-# peers, and neither is needed by the generated Prisma Client at runtime.
+# npm still materializes Prisma's optional CLI peer in this workspace layout,
+# despite --omit=peer. The generated client needs @prisma/client and .prisma,
+# not the CLI or TypeScript compiler; migrations use the dedicated image above.
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
 RUN apt-get update \
@@ -35,7 +36,7 @@ COPY apps/mobile/package.json apps/mobile/package.json
 COPY services/api/package.json services/api/package.json
 COPY packages/trading-core/package.json packages/trading-core/package.json
 RUN npm ci --omit=dev --omit=peer --workspace @autonomagent/api --workspace @autonomagent/trading-core --include-workspace-root=false \
-    && rm -rf node_modules/@autonomagent/mobile \
+    && rm -rf node_modules/@autonomagent/mobile node_modules/prisma node_modules/typescript \
     && npm cache clean --force
 COPY --from=build /workspace/dist/services/api ./dist/services/api
 COPY --from=build /workspace/packages/trading-core/dist ./packages/trading-core/dist
