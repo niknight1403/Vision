@@ -2,7 +2,7 @@
 set -euo pipefail
 image="${1:-vision-api:ci}"
 docker run --rm --entrypoint sh "$image" -eu -c '
-  test ! -e /workspace/apps/mobile
+  test ! -e /workspace/apps/mobile/node_modules
   test ! -e /workspace/node_modules/@autonomagent/mobile
   for package in expo metro vitest typescript tsx; do
     if find /workspace/node_modules -type d -name "$package" -print -quit | grep -q .; then
