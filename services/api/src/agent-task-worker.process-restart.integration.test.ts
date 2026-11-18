@@ -51,7 +51,7 @@ suite("agent worker process restart (PostgreSQL)", () => {
     await prisma.$connect();
     server = createServer(async (request, reply) => {
       try {
-        if (request.method === "POST" && typeof request.url === "string" && /^\\/internal\\/agent-tasks\\/[^/]+\\/checkpoint$/.test(request.url)) {
+        if (request.method === "POST" && typeof request.url === "string" && request.url.startsWith("/internal/agent-tasks/") && request.url.endsWith("/checkpoint")) {
           const body = await readJson(request);
           if (request.headers.authorization !== `Bearer ${token}`) return sendJson(reply, 401, { error: "unauthorized" });
           const workerId = body.workerId;
