@@ -86,19 +86,16 @@ jobs:
         run: npm run typecheck
       - name: Run unit and PostgreSQL integration tests
         run: npm test
-      - name: Audit API production dependency closure
+      - name: Capture API production dependency tree (diagnostic only)
         shell: bash
         run: |
-          audit_status=0
-          npm audit --omit=dev --workspace @autonomagent/api --audit-level=high --json > api-production-audit.json || audit_status=$?
-          echo "API production audit exit code: ${audit_status}"
-          exit "${audit_status}"
-      - name: Upload API production audit report
+          npm ls --workspace @autonomagent/api --omit=dev --all --json > api-production-dependency-tree.json
+      - name: Upload API production dependency tree
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: api-production-audit-${{ github.sha }}
-          path: api-production-audit.json
+          name: api-production-dependency-tree-${{ github.sha }}
+          path: api-production-dependency-tree.json
           if-no-files-found: warn
           retention-days: 14
       - name: Block high and critical dependency advisories
