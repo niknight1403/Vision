@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@autonomagent/trading-core": "0.3.0",
-    "expo": "^58.0.25",
+    "expo": "~58.0.26",
     "expo-status-bar": "~58.0.5",
     "expo-system-ui": "~58.0.7",
     "react": "19.3.0",
