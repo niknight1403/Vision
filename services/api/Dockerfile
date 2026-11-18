@@ -35,6 +35,7 @@ COPY apps/mobile/package.json apps/mobile/package.json
 COPY services/api/package.json services/api/package.json
 COPY packages/trading-core/package.json packages/trading-core/package.json
 RUN npm ci --omit=dev --workspace @autonomagent/api --workspace @autonomagent/trading-core --include-workspace-root=false \
+    && rm -rf node_modules/@autonomagent/mobile \
     && npm cache clean --force
 COPY --from=build /workspace/dist/services/api ./dist/services/api
 COPY --from=build /workspace/packages/trading-core/dist ./packages/trading-core/dist
