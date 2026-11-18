@@ -7,6 +7,8 @@ docker run --rm --entrypoint sh "$image" -eu -c '
   for package in expo metro vitest typescript tsx; do
     if find /workspace/node_modules -type d -name "$package" -print -quit | grep -q .; then
       echo "Forbidden build-time package found in runtime image: $package" >&2
+      npm ls "$package" --all || true
+      find /workspace/node_modules -type d -name "$package" -print >&2
       exit 1
     fi
   done
