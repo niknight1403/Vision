@@ -137,6 +137,47 @@ suite("authenticated deal review routes (RBAC)", () => {
     expect(status.json().result).toBeNull();
   });
 
+  it("passes the persisted neural agent network review through the task status API", async () => {
+    const deal = await createDeal();
+    const tokens = await login(adminEmail);
+    const queued = await app.inject({
+      method: "POST",
+      url: `/v1/deals/${deal.id}/treasure-analysis`,
+      headers: { authorization: "Bearer " + tokens.accessToken,
+        "x-idempotency-key": "network-review-" + process.pid + "-" + sequence },
+      payload: { imageUrl: "https://images.example.test/network-review.jpg" },
+    });
+    expect(queued.statusCode).toBe(202);
+    const taskId = queued.json().taskId as string;
+    createdTaskIds.push(taskId);
+
+    const networkReview = {
+      status: "REVIEWED",
+      consensus: "MEDIUM",
+      summary: "Specialists agree on the broad identification; market evidence remains incomplete.",
+      unresolved_conflicts: ["Condition grade differs between specialists."],
+      evidence_gaps: ["Only two comparable sales are available."],
+      recommended_next_steps: ["Collect one additional comparable sale."],
+      confidence: 0.62,
+    };
+    const result = {
+      assessment: { status: "NEEDS_MORE_EVIDENCE", confidence: 0.62 },
+      agent_network: networkReview,
+      purchase_authorized: false,
+      authenticity_verified: false,
+    };
+    await prisma.agentTask.update({ where: { id: taskId }, data: { result } });
+
+    const status = await app.inject({
+      method: "GET",
+      url: "/v1/treasure-analyses/" + taskId,
+      headers: { authorization: "Bearer " + tokens.accessToken },
+    });
+    expect(status.statusCode).toBe(200);
+    expect(status.json().result.agent_network).toEqual(networkReview);
+    expect(status.json().result.purchase_authorized).toBe(false);
+  });
+
   it("accepts specialist checkpoints only from the authenticated worker holding the live lease", async () => {
     const deal = await createDeal();
     const tokens = await login(adminEmail);
