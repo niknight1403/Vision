@@ -21,9 +21,9 @@ FROM build AS migrate
 ENV NODE_ENV=production
 CMD ["npx", "prisma", "migrate", "deploy", "--schema", "services/api/prisma/schema.prisma"]
 
-# Install only the production dependency closure of the API and trading-core
-# workspaces. The mobile workspace manifest is present for npm workspace
-# resolution, but it is not selected for installation.
+# Install only production dependencies of the API and trading-core workspaces.
+# Omit optional peer packages: Prisma declares its CLI and TypeScript as optional
+# peers, and neither is needed by the generated Prisma Client at runtime.
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
 RUN apt-get update \
@@ -34,7 +34,7 @@ COPY package.json package-lock.json ./
 COPY apps/mobile/package.json apps/mobile/package.json
 COPY services/api/package.json services/api/package.json
 COPY packages/trading-core/package.json packages/trading-core/package.json
-RUN npm ci --omit=dev --workspace @autonomagent/api --workspace @autonomagent/trading-core --include-workspace-root=false \
+RUN npm ci --omit=dev --omit=peer --workspace @autonomagent/api --workspace @autonomagent/trading-core --include-workspace-root=false \
     && rm -rf node_modules/@autonomagent/mobile \
     && npm cache clean --force
 COPY --from=build /workspace/dist/services/api ./dist/services/api
