@@ -99,7 +99,8 @@ class HiddenTreasureSwarm:
         self.minimum_comparables = minimum_comparables
 
     async def _run_one(
-        self, role: SpecialistRole, brief: ProductBrief
+        self, role: SpecialistRole, brief: ProductBrief,
+        on_finding: Callable[[SpecialistFinding], Awaitable[None]] | None = None,
     ) -> SpecialistFinding:
         adapter = self.specialists.get(role)
         if adapter is None:
@@ -116,20 +117,75 @@ class HiddenTreasureSwarm:
                 )
             if finding.role != role:
                 raise ValueError("Specialist adapter returned a mismatched role")
-            return finding
         except Exception:
             # Keep provider secrets and internal exception details out of results.
-            return SpecialistFinding(
+            finding = SpecialistFinding(
                 role=role, status="FAILED",
                 summary="Specialist analysis failed; retry or manual review required.",
                 confidence=0,
                 uncertainties=["No verified result was produced."],
             )
+        if on_finding is not None:
+            # Persistence failures must fail the task; they must never be hidden as
+            # specialist failures or allow an uncheckpointed result to be reported.
+            await on_finding(finding)
+        return finding
 
-    async def analyze(self, brief: ProductBrief) -> TreasureAssessment:
-        findings = list(await asyncio.gather(*(
-            self._run_one(role, brief) for role in REQUIRED_ROLES
-        )))
+    @staticmethod
+    def _restore_findings(checkpoint: Mapping[str, object] | None) -> dict[SpecialistRole, SpecialistFinding]:
+        if checkpoint is None:
+            return {}
+        if checkpoint.get("schema_version") != 1:
+            raise ValueError("Unsupported specialist checkpoint schema")
+        raw = checkpoint.get("findings")
+        if not isinstance(raw, dict):
+            raise ValueError("Invalid specialist checkpoint findings")
+        restored: dict[SpecialistRole, SpecialistFinding] = {}
+        for key, value in raw.items():
+            role = SpecialistRole(key)
+            finding = SpecialistFinding.model_validate(value)
+            if finding.role != role:
+                raise ValueError("Checkpoint role mismatch")
+            # Only successful findings are reusable. FAILED/SKIPPED are retried so
+            # configuration or provider recovery can make progress on the next run.
+            if finding.status == "SUCCEEDED":
+                restored[role] = finding
+        if not set(restored).issubset(set(REQUIRED_ROLES)):
+            raise ValueError("Checkpoint contains an unknown role")
+        return restored
+
+    async def analyze(
+        self, brief: ProductBrief, *,
+        checkpoint: Mapping[str, object] | None = None,
+        on_finding: Callable[[SpecialistFinding], Awaitable[None]] | None = None,
+    ) -> TreasureAssessment:
+        restored = self._restore_findings(checkpoint)
+        findings_by_role = dict(restored)
+        pending = [role for role in REQUIRED_ROLES if role not in restored]
+        lock = asyncio.Lock()
+
+        async def persist(finding: SpecialistFinding) -> None:
+            async with lock:
+                findings_by_role[finding.role] = finding
+                if on_finding is not None:
+                    await on_finding(finding)
+
+        tasks = [
+            asyncio.create_task(self._run_one(role, brief, persist))
+            for role in pending
+        ]
+        try:
+            if tasks:
+                completed = await asyncio.gather(*tasks)
+                for finding in completed:
+                    findings_by_role[finding.role] = finding
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        findings = [findings_by_role[role] for role in REQUIRED_ROLES]
         return self._synthesize(brief, findings)
 
     def _synthesize(

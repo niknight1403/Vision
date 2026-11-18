@@ -1,10 +1,12 @@
 """Private HTTP entry point for the Hidden Treasure Swarm."""
 from __future__ import annotations
 
+import asyncio
 import hmac
 import os
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -23,6 +25,9 @@ class AnalysisRequest(BaseModel):
     asking_price_minor: int = Field(ge=0)
     known_costs_minor: int = Field(default=0, ge=0)
     currency: str = Field(default="EUR", min_length=3, max_length=3)
+    checkpoint: dict[str, Any] | None = None
+    checkpoint_task_id: str | None = Field(default=None, min_length=1, max_length=128)
+    worker_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 @asynccontextmanager
@@ -91,7 +96,43 @@ async def analyze(
         fallback_model=inspector.fallback_model,
     )
     swarm = HiddenTreasureSwarm(specialists, concurrency=6, timeout_seconds=45)
-    assessment = await swarm.analyze(brief)
+    checkpoint_state = dict(request.checkpoint or {"schema_version": 1, "findings": {}})
+    checkpoint_lock = asyncio.Lock()
+
+    async def persist_finding(finding) -> None:
+        if not request.checkpoint_task_id or not request.worker_id:
+            raise RuntimeError("CHECKPOINT_CALLBACK_NOT_CONFIGURED")
+        # The callback origin comes only from trusted service configuration, never
+        # from the request. This prevents forwarding the shared worker token to an
+        # attacker-controlled URL.
+        api_base = urlsplit(os.getenv("API_BASE_URL", "http://api:8080"))
+        if (api_base.scheme not in {"http", "https"} or not api_base.hostname
+                or api_base.username or api_base.password or api_base.query or api_base.fragment):
+            raise RuntimeError("CHECKPOINT_API_BASE_URL_INVALID")
+        callback_url = (
+            api_base.scheme + "://" + api_base.netloc
+            + "/internal/agent-tasks/" + quote(request.checkpoint_task_id, safe="")
+            + "/checkpoint"
+        )
+        async with checkpoint_lock:
+            current = dict(checkpoint_state)
+            findings = dict(current.get("findings", {}))
+            findings[finding.role.value] = finding.model_dump(mode="json")
+            current = {"schema_version": 1, "findings": findings}
+            response = await inspector.http_client.post(
+                callback_url,
+                json={"workerId": request.worker_id, "checkpoint": current},
+                headers={"authorization": "Bearer " + app.state.worker_token},
+            )
+            response.raise_for_status()
+            checkpoint_state.clear()
+            checkpoint_state.update(current)
+
+    assessment = await swarm.analyze(
+        brief,
+        checkpoint=checkpoint_state,
+        on_finding=persist_finding if request.checkpoint_task_id else None,
+    )
     return {
         "assessment": assessment.model_dump(mode="json"),
         "visual_inspection": visual,

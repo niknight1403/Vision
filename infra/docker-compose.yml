@@ -88,6 +88,7 @@ services:
       VISION_WORKER_HOST: 0.0.0.0
       VISION_WORKER_PORT: "8091"
       VISION_WORKER_TOKEN: ${VISION_WORKER_TOKEN:?Set VISION_WORKER_TOKEN in infra/.env}
+      API_BASE_URL: http://api:8080
       VISION_ALLOWED_IMAGE_HOSTS: ${VISION_ALLOWED_IMAGE_HOSTS:?Set exact image host allowlist}
       LLM_API_KEY: ${LLM_API_KEY:-ollama}
       LLM_BASE_URL: http://ollama:11434/v1

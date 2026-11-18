@@ -3,11 +3,14 @@ import { PrismaClient } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "./app.js";
 import { hashPassword } from "./auth-session-service.js";
+import { claimAgentTask, saveTaskCheckpoint } from "./agent-task-service.js";
 
 const databaseEnabled = Boolean(process.env.DATABASE_URL);
 const suite = describe.skipIf(!databaseEnabled);
 const SIGNING_SECRET = "test-signing-secret-with-at-least-32-characters";
 const PASSWORD = "correct horse battery staple";
+const WORKER_TOKEN = "integration-worker-token-with-more-than-32-characters";
+let previousWorkerToken: string | undefined;
 
 const prisma = new PrismaClient();
 const createdUserIds: string[] = [];
@@ -63,6 +66,8 @@ async function login(email: string) {
 
 suite("authenticated deal review routes (RBAC)", () => {
   beforeAll(async () => {
+    previousWorkerToken = process.env.VISION_WORKER_TOKEN;
+    process.env.VISION_WORKER_TOKEN = WORKER_TOKEN;
     await prisma.$connect();
     app = await buildServer({ prisma, authSigningSecret: SIGNING_SECRET });
     await app.ready();
@@ -87,6 +92,8 @@ suite("authenticated deal review routes (RBAC)", () => {
   afterAll(async () => {
     await app?.close();
     await prisma.$disconnect();
+    if (previousWorkerToken === undefined) delete process.env.VISION_WORKER_TOKEN;
+    else process.env.VISION_WORKER_TOKEN = previousWorkerToken;
   });
 
   it("rejects a wrong password without issuing a session", async () => {
@@ -128,6 +135,113 @@ suite("authenticated deal review routes (RBAC)", () => {
     expect(status.statusCode).toBe(200);
     expect(status.json().status).toBe("QUEUED");
     expect(status.json().result).toBeNull();
+  });
+
+  it("accepts specialist checkpoints only from the authenticated worker holding the live lease", async () => {
+    const deal = await createDeal();
+    const tokens = await login(adminEmail);
+    const queued = await app.inject({
+      method: "POST",
+      url: `/v1/deals/${deal.id}/treasure-analysis`,
+      headers: { authorization: "Bearer " + tokens.accessToken,
+        "x-idempotency-key": "checkpoint-test-" + process.pid + "-" + sequence },
+      payload: { imageUrl: "https://images.example.test/checkpoint.jpg" },
+    });
+    expect(queued.statusCode).toBe(202);
+    const taskId = queued.json().taskId as string;
+    createdTaskIds.push(taskId);
+    const workerId = "integration-worker-" + process.pid;
+    await claimAgentTask(prisma, taskId, workerId, 90);
+    const checkpoint = {
+      schema_version: 1,
+      findings: {
+        visual_identification: {
+          role: "visual_identification", status: "SUCCEEDED", summary: "Visible label checked",
+          confidence: 0.9, facts: [], evidence_urls: [], uncertainties: [], comparable_sales: [],
+        },
+      },
+    };
+    const url = `/internal/agent-tasks/${taskId}/checkpoint`;
+    const unauthenticated = await app.inject({
+      method: "POST", url, payload: { workerId, checkpoint },
+    });
+    expect(unauthenticated.statusCode).toBe(401);
+
+    const saved = await app.inject({
+      method: "POST", url,
+      headers: { authorization: "Bearer " + WORKER_TOKEN },
+      payload: { workerId, checkpoint },
+    });
+    expect(saved.statusCode).toBe(200);
+    expect((await prisma.agentTask.findUniqueOrThrow({ where: { id: taskId } })).checkpoint)
+      .toEqual(checkpoint);
+
+    const stale = await app.inject({
+      method: "POST", url,
+      headers: { authorization: "Bearer " + WORKER_TOKEN },
+      payload: { workerId: "stale-worker", checkpoint },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toEqual({ error: "TASK_LEASE_LOST" });
+  });
+
+  it("reclaims an expired worker lease and restores the durable specialist checkpoint", async () => {
+    const deal = await createDeal();
+    const tokens = await login(adminEmail);
+    const queued = await app.inject({
+      method: "POST",
+      url: `/v1/deals/${deal.id}/treasure-analysis`,
+      headers: { authorization: "Bearer " + tokens.accessToken,
+        "x-idempotency-key": "restart-checkpoint-" + process.pid + "-" + sequence },
+      payload: { imageUrl: "https://images.example.test/restart.jpg" },
+    });
+    expect(queued.statusCode).toBe(202);
+    const taskId = queued.json().taskId as string;
+    createdTaskIds.push(taskId);
+
+    const firstWorker = "crashed-worker-" + process.pid;
+    const firstClaim = await claimAgentTask(prisma, taskId, firstWorker, 90);
+    const checkpoint = {
+      schema_version: 1,
+      findings: {
+        market_research: {
+          role: "market_research", status: "SUCCEEDED", summary: "Three comparable sales found",
+          confidence: 0.82, facts: [], evidence_urls: [], uncertainties: [], comparable_sales: [],
+        },
+      },
+    };
+    await saveTaskCheckpoint(prisma, taskId, firstWorker, checkpoint);
+
+    // Simulate process death: the lease expires while the saved checkpoint remains durable.
+    await prisma.agentTask.update({
+      where: { id: taskId },
+      data: { leaseUntil: new Date(Date.now() - 1_000) },
+    });
+
+    const replacementWorker = "replacement-worker-" + process.pid;
+    const reclaimed = await claimAgentTask(prisma, taskId, replacementWorker, 90);
+    expect(reclaimed.status).toBe("RUNNING");
+    expect(reclaimed.lockedBy).toBe(replacementWorker);
+    expect(reclaimed.attempt).toBe(firstClaim.attempt + 1);
+    expect(reclaimed.checkpoint).toEqual(checkpoint);
+
+    await expect(saveTaskCheckpoint(prisma, taskId, firstWorker, checkpoint))
+      .rejects.toThrow("TASK_LEASE_LOST");
+
+    const resumedCheckpoint = {
+      schema_version: 1,
+      findings: {
+        ...checkpoint.findings,
+        visual_identification: {
+          role: "visual_identification", status: "SUCCEEDED", summary: "Model marking confirmed",
+          confidence: 0.91, facts: [], evidence_urls: [], uncertainties: [], comparable_sales: [],
+        },
+      },
+    };
+    await saveTaskCheckpoint(prisma, taskId, replacementWorker, resumedCheckpoint);
+    const persisted = await prisma.agentTask.findUniqueOrThrow({ where: { id: taskId } });
+    expect(persisted.checkpoint).toEqual(resumedCheckpoint);
+    expect(persisted.lockedBy).toBe(replacementWorker);
   });
 
   it("rejects reuse of a treasure-analysis idempotency key with different input", async () => {

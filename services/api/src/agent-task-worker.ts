@@ -15,7 +15,6 @@ const token = process.env.VISION_WORKER_TOKEN;
 const pollMs = Number(process.env.AGENT_WORKER_POLL_INTERVAL_MS ?? "1500");
 const leaseSeconds = 180;
 const requestTimeoutMs = 90_000;
-
 if (!endpoint || !token || token.length < 32) {
   throw new Error("VISION_WORKER_URL and a 32-character VISION_WORKER_TOKEN are required");
 }
@@ -100,6 +99,9 @@ async function execute(task: NonNullable<Awaited<ReturnType<typeof claimTask>>>)
         asking_price_minor: purchasePrice,
         known_costs_minor: Math.max(0, totalCost - purchasePrice),
         currency: typeof input.currency === "string" ? input.currency : "EUR",
+        checkpoint: task.checkpoint ?? { schema_version: 1, findings: {} },
+        checkpoint_task_id: task.id,
+        worker_id: workerId,
       }),
       signal: AbortSignal.timeout(requestTimeoutMs),
     });
