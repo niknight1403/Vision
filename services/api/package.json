@@ -10,7 +10,7 @@
     "start:migrate": "prisma migrate deploy --schema prisma/schema.prisma && npm run start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run src",
-    "worker": "tsx src/agent-task-worker.ts",
+    "worker": "node dist/services/api/src/agent-task-worker.js",
     "admin:bootstrap": "tsx src/admin-bootstrap.ts"
   },
   "dependencies": {
