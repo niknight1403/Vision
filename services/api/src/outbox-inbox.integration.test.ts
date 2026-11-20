@@ -55,6 +55,24 @@ suite("transactional outbox consumer inbox (PostgreSQL)", () => {
     expect(await prisma.outboxConsumerReceipt.count({ where: { eventId: message.id } })).toBe(2);
   });
 
+  it("allows only one concurrent transaction to process the same consumer event", async () => {
+    const message = await createMessage("test.inbox.concurrent");
+    const scope = `inbox-concurrent-${message.id}`;
+    scopes.push(scope);
+    const handler = async (tx: Parameters<typeof processOutboxEventInTransaction>[0]) => {
+      await tx.idempotencyKey.create({ data: {
+        scope, key: "effect", requestHash: "c".repeat(64), expiresAt: new Date(Date.now() + 60_000),
+      } });
+    };
+    const results = await Promise.all([
+      prisma.$transaction((tx) => processOutboxEventInTransaction(tx, "concurrent-projection", message, handler)),
+      prisma.$transaction((tx) => processOutboxEventInTransaction(tx, "concurrent-projection", message, handler)),
+    ]);
+    expect(results.sort()).toEqual(["DUPLICATE", "PROCESSED"]);
+    expect(await prisma.idempotencyKey.count({ where: { scope } })).toBe(1);
+    expect(await prisma.outboxConsumerReceipt.count({ where: { eventId: message.id, consumerName: "concurrent-projection" } })).toBe(1);
+  });
+
   it("rolls back the receipt when the consumer transaction fails, allowing safe retry", async () => {
     const message = await createMessage("test.inbox.rollback");
     const scope = `inbox-rollback-${message.id}`;
