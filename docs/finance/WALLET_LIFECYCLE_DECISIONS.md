@@ -174,3 +174,31 @@ This checkpoint records implementation facts, not an approval of a new financial
 - `postJournalTransactionInTransaction` is available for a future atomic command, but no current wallet lifecycle mutation posts a journal transaction.
 
 No schema or runtime behavior is changed by this checkpoint. Do not weaken the global unique constraint or introduce a compound-key migration until reference namespace, backfill, collision handling, and two-tenant concurrency behavior are reviewed together. Deposit, purchase, fee, shipping, settlement, payout, refund, chargeback, and adjustment commands remain blocked.
+
+
+## 13. Sprint 3.13 — atomic composition gap (verified)
+
+The current implementation has two useful caller-owned transaction primitives:
+
+- `postJournalTransactionInTransaction(tx, input)` creates and finalizes a balanced journal transaction inside the caller's transaction.
+- `enqueueOutboxEvent(tx, input)` writes an outbox event inside the caller's transaction.
+
+The wallet commands have a different boundary today:
+
+- `reserveFunds(prisma, input)` opens and owns its SERIALIZABLE transaction.
+- `releaseFunds(prisma, input)` opens and owns its SERIALIZABLE transaction.
+- Both commands atomically mutate the wallet counter, append the wallet ledger row, and enqueue their reservation event within that private transaction.
+- Neither accepts a caller-owned `Prisma.TransactionClient`; therefore a caller cannot currently compose either wallet mutation with journal posting and a further outbox event in one outer transaction without nesting transactions.
+
+This is a concrete integration gap, not a failed atomicity guarantee for the existing wallet command. Its three existing writes remain in one transaction. Do not work around the gap by invoking `postJournalTransaction` from inside a wallet transaction or by opening a second transaction: that would break the intended all-or-nothing boundary.
+
+Safe follow-up design, pending finance-owner approval of accounting semantics:
+
+1. Extract transaction-client variants for wallet reserve/release that perform only the wallet lock, validation, counter mutation, ledger append, and existing wallet outbox enqueue.
+2. Keep the current public PrismaClient wrappers, preserving SERIALIZABLE isolation and retry behavior.
+3. Let a future, separately approved application command own one SERIALIZABLE outer transaction and compose the wallet transaction-client helper, `postJournalTransactionInTransaction`, and any additional outbox event.
+4. Retry the entire outer transaction on serialization failure; never retry only one component.
+5. Add PostgreSQL integration tests proving all writes commit together and all roll back together, including a failure after journal finalization and before outer commit.
+6. Keep the journal account mapping and event semantics behind an explicit finance-owner decision. Do not add a journal posting to current reserve/release flows merely to demonstrate technical composition.
+
+No wallet service code, schema, accounting mapping, provider call, payment command, or production behavior is changed by this audit checkpoint.
