@@ -21,12 +21,14 @@ suite("double-entry journal (PostgreSQL)", () => {
   });
 
   afterAll(async () => {
-    await prisma.$executeRaw\`SELECT set_config('app.journal_maintenance', 'on', false)\`;
-    if (transactionIds.length) {
-      await prisma.journalEntry.deleteMany({ where: { transactionId: { in: transactionIds } } });
-      await prisma.journalTransaction.deleteMany({ where: { id: { in: transactionIds } } });
-    }
-    await prisma.tenant.deleteMany({ where: { id: { in: [tenantId, otherTenantId] } } });
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw\`SELECT set_config('app.journal_maintenance', 'on', true)\`;
+      if (transactionIds.length) {
+        await tx.journalEntry.deleteMany({ where: { transactionId: { in: transactionIds } } });
+        await tx.journalTransaction.deleteMany({ where: { id: { in: transactionIds } } });
+      }
+      await tx.tenant.deleteMany({ where: { id: { in: [tenantId, otherTenantId] } } });
+    });
     await prisma.$disconnect();
   });
 
@@ -77,7 +79,7 @@ suite("double-entry journal (PostgreSQL)", () => {
     const transaction = await postJournalTransaction(prisma, posting("journal-immutable"));
     transactionIds.push(transaction.id);
     await expect(prisma.journalEntry.updateMany({
-      where: { transactionId: transaction.id }, data: { description: "tampered" } as never,
+      where: { transactionId: transaction.id }, data: { debitCents: 1n },
     })).rejects.toThrow();
     await expect(prisma.journalEntry.deleteMany({
       where: { transactionId: transaction.id },
