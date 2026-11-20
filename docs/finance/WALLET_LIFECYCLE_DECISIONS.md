@@ -183,12 +183,7 @@ The current implementation has two useful caller-owned transaction primitives:
 - `postJournalTransactionInTransaction(tx, input)` creates and finalizes a balanced journal transaction inside the caller's transaction.
 - `enqueueOutboxEvent(tx, input)` writes an outbox event inside the caller's transaction.
 
-The wallet commands have a different boundary today:
-
-- `reserveFunds(prisma, input)` opens and owns its SERIALIZABLE transaction.
-- `releaseFunds(prisma, input)` opens and owns its SERIALIZABLE transaction.
-- Both commands atomically mutate the wallet counter, append the wallet ledger row, and enqueue their reservation event within that private transaction.
-- Neither accepts a caller-owned `Prisma.TransactionClient`; therefore a caller cannot currently compose either wallet mutation with journal posting and a further outbox event in one outer transaction without nesting transactions.
+At the initial Sprint 3.13 audit checkpoint, the wallet commands had a private transaction boundary. The implementation below now preserves those public wrappers while also exposing caller-owned transaction variants. Both variants keep the wallet counter mutation, ledger append, and reservation outbox enqueue together.
 
 This is a concrete integration gap, not a failed atomicity guarantee for the existing wallet command. Its three existing writes remain in one transaction. Do not work around the gap by invoking `postJournalTransaction` from inside a wallet transaction or by opening a second transaction: that would break the intended all-or-nothing boundary.
 
