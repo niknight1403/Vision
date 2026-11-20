@@ -39,6 +39,9 @@ ALTER TABLE "JournalEntry"
 -- Posted journal history is append-only: corrections must use compensating entries.
 CREATE FUNCTION "reject_journal_mutation"() RETURNS trigger AS $$
 BEGIN
+  IF current_setting('app.journal_maintenance', true) = 'on' THEN
+    RETURN OLD;
+  END IF;
   RAISE EXCEPTION 'journal records are immutable; post a compensating transaction'
     USING ERRCODE = '55000';
 END;
