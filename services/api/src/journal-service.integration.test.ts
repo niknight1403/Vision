@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { getJournalAccountBalance, postJournalTransaction, postJournalTransactionInTransaction, reconcileJournal } from "./journal-service.js";
+import { enqueueOutboxEvent } from "./outbox-service.js";
 
 const databaseEnabled = Boolean(process.env.DATABASE_URL);
 const suite = describe.skipIf(!databaseEnabled);
@@ -104,6 +105,45 @@ suite("double-entry journal (PostgreSQL)", () => {
     expect(posted.entries).toHaveLength(2);
     expect(await prisma.journalTransaction.count({
       where: { tenantId, referenceId: committedInput.referenceId },
+    })).toBe(1);
+  });
+
+  it("commits journal and outbox together and rolls both back together", async () => {
+    const rollbackReference = "journal-outbox-rollback";
+    await expect(prisma.$transaction(async (tx) => {
+      const posted = await postJournalTransactionInTransaction(tx, posting(rollbackReference));
+      await enqueueOutboxEvent(tx, {
+        eventType: "journal.posted",
+        aggregateId: posted.id,
+        correlationId: rollbackReference,
+        payload: { journalTransactionId: posted.id, referenceId: rollbackReference },
+      });
+      throw new Error("FORCE_JOURNAL_OUTBOX_ROLLBACK");
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })).rejects.toThrow("FORCE_JOURNAL_OUTBOX_ROLLBACK");
+
+    expect(await prisma.journalTransaction.count({
+      where: { tenantId, referenceId: rollbackReference },
+    })).toBe(0);
+    expect(await prisma.outboxEvent.count({
+      where: { correlationId: rollbackReference },
+    })).toBe(0);
+
+    const commitReference = "journal-outbox-commit";
+    await prisma.$transaction(async (tx) => {
+      const posted = await postJournalTransactionInTransaction(tx, posting(commitReference));
+      await enqueueOutboxEvent(tx, {
+        eventType: "journal.posted",
+        aggregateId: posted.id,
+        correlationId: commitReference,
+        payload: { journalTransactionId: posted.id, referenceId: commitReference },
+      });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    expect(await prisma.journalTransaction.count({
+      where: { tenantId, referenceId: commitReference },
+    })).toBe(1);
+    expect(await prisma.outboxEvent.count({
+      where: { correlationId: commitReference, eventType: "journal.posted" },
     })).toBe(1);
   });
 
