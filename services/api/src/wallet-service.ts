@@ -86,7 +86,7 @@ export async function reserveFunds(
         description: input.description,
       },
     });
-    return snapshot(tx, input.accountId);
+    return snapshot(tx, input);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 
@@ -113,7 +113,7 @@ export async function releaseFunds(
 
   return prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
-      SELECT id FROM "WalletAccount" WHERE id = ${input.accountId} FOR UPDATE
+      SELECT id FROM "WalletAccount" WHERE id = ${input.accountId} AND "ownerId" = ${input.ownerId} AND "tenantId" = ${input.tenantId} FOR UPDATE
     `;
     if (rows.length === 0) throw new Error("WALLET_NOT_FOUND");
 
@@ -147,7 +147,7 @@ export async function releaseFunds(
     if (alreadyReleasedCents + input.amountCents > originalReservation.amountCents) {
       throw new Error("RESERVATION_RELEASE_EXCEEDS_ORIGINAL_AMOUNT");
     }
-    const account = await tx.walletAccount.findUnique({ where: { id: input.accountId } });
+    const account = await tx.walletAccount.findFirst({ where: { id: input.accountId, ownerId: input.ownerId, tenantId: input.tenantId } });
     if (!account) throw new Error("WALLET_NOT_FOUND");
     if (account.reservedCents < input.amountCents) throw new Error("RESERVATION_BALANCE_TOO_LOW");
 
