@@ -75,6 +75,32 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(current.attempts).toBe(1);
     expect(current.availableAt.getTime()).toBeGreaterThan(Date.now());
   });
+  it("moves exhausted messages to dead letter and clears the lease", async () => {
+    const aggregateId = `outbox-dead-letter-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({
+      data: {
+        eventType: "test.dead-letter",
+        aggregateId,
+        payload: { test: true },
+      },
+    });
+
+    const result = await processOneOutboxMessage(
+      prisma,
+      { workerId: "worker-dead-letter", maxAttempts: 1, eventTypes: ["test.dead-letter"] },
+      async () => { throw new Error("permanent downstream rejection"); },
+    );
+    expect(result).toBe("DEAD_LETTER");
+
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("DEAD_LETTER");
+    expect(current.lockedBy).toBeNull();
+    expect(current.leaseUntil).toBeNull();
+    expect(current.lastError).toBe("permanent downstream rejection");
+    expect(current.attempts).toBe(1);
+  });
+
 });
 
 if (!databaseEnabled) {
