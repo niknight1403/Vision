@@ -89,7 +89,7 @@ suite("agent task retries (PostgreSQL)", () => {
     const inputTwo = { flags: ["paper", "draft"], product: { region: "DE", sku: "demo-1" } };
     const [first, second] = await Promise.all([
       createAgentTask(prisma, { ownerId, tenantId, taskType: "catalog.preview", input: inputOne, idempotencyKey }),
-      createAgentTask(prisma, { ownerId, taskType: "catalog.preview", input: inputTwo, idempotencyKey }),
+      createAgentTask(prisma, { ownerId, tenantId, taskType: "catalog.preview", input: inputTwo, idempotencyKey }),
     ]);
     taskIds.push(first.id);
     expect(second.id).toBe(first.id);
@@ -98,13 +98,13 @@ suite("agent task retries (PostgreSQL)", () => {
     expect(await prisma.outboxEvent.count({ where: { aggregateId: first.id } })).toBe(1);
 
     await expect(createAgentTask(prisma, {
-      ownerId, taskType: "catalog.preview", input: { product: { sku: "different" } }, idempotencyKey,
+      ownerId, tenantId, taskType: "catalog.preview", input: { product: { sku: "different" } }, idempotencyKey,
     })).rejects.toThrow("TASK_IDEMPOTENCY_CONFLICT");
 
     const raceKey = `${ownerId}-different-payload-race`;
     const outcomes = await Promise.allSettled([
-      createAgentTask(prisma, { ownerId, taskType: "catalog.preview", input: { choice: "left" }, idempotencyKey: raceKey }),
-      createAgentTask(prisma, { ownerId, taskType: "catalog.preview", input: { choice: "right" }, idempotencyKey: raceKey }),
+      createAgentTask(prisma, { ownerId, tenantId, taskType: "catalog.preview", input: { choice: "left" }, idempotencyKey: raceKey }),
+      createAgentTask(prisma, { ownerId, tenantId, taskType: "catalog.preview", input: { choice: "right" }, idempotencyKey: raceKey }),
     ]);
     expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
     const rejected = outcomes.find((outcome) => outcome.status === "rejected");
