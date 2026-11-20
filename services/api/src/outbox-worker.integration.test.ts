@@ -45,6 +45,31 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     await prisma.idempotencyKey.deleteMany({ where: { scope: `worker-inbox-${event.id}` } });
   });
 
+  it("acknowledges redelivery without repeating effects when a receipt already exists", async () => {
+    const aggregateId = `outbox-inbox-redelivery-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.inbox.worker.redelivery", aggregateId, payload: { test: true },
+    } });
+    await prisma.outboxConsumerReceipt.create({ data: {
+      consumerName: "integration-redelivery", eventId: event.id,
+    } });
+    const handler = async () => { throw new Error("DUPLICATE_HANDLER_MUST_NOT_RUN"); };
+    const result = await processOneOutboxMessageWithInbox(
+      prisma,
+      { workerId: "worker-redelivery", eventTypes: ["test.inbox.worker.redelivery"] },
+      "integration-redelivery",
+      handler,
+    );
+    expect(result).toBe("PUBLISHED");
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("PUBLISHED");
+    expect(current.attempts).toBe(1);
+    expect(await prisma.outboxConsumerReceipt.count({
+      where: { eventId: event.id, consumerName: "integration-redelivery" },
+    })).toBe(1);
+  });
+
   it("does not acknowledge or retain a receipt when an inbox consumer transaction fails", async () => {
     const aggregateId = `outbox-inbox-failure-${process.pid}-${Date.now()}`;
     aggregateIds.push(aggregateId);
