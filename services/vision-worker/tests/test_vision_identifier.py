@@ -156,7 +156,7 @@ async def test_pinned_backend_refuses_different_host_and_port():
 async def test_transport_keeps_original_host_header_and_tls_origin():
     captured = {}
 
-    class EmptyCoreStream(httpcore.AsyncByteStream):
+    class EmptyCoreStream:
         async def __aiter__(self):
             if False:
                 yield b""
