@@ -69,7 +69,7 @@ model Tenant {
 }
 
 model TenantMembership {
-  id        String     @id @default(cuid())
+  id        String     @id @default(cuid()) @default(cuid())
   tenantId  String
   userId    String
   role      TenantRole @default(VIEWER)
@@ -251,7 +251,7 @@ model LegacyDealReviewState {
 }
 
 model DealReview {
-  id             String              @id @default(cuid())
+  id             String              @id @default(cuid()) @default(cuid())
   tenantId       String
   candidateId    String
   reviewerUserId String
