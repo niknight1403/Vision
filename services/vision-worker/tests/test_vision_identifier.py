@@ -168,7 +168,11 @@ async def test_transport_keeps_original_host_header_and_tls_origin():
         )
 
     transport._pool.handle_async_request = fake_send
-    request = httpx.Request(\n        "GET",\n        "https://images.example.org/item.png",\n        headers={"Host": "images.example.org"},\n    )
+    request = httpx.Request(
+        "GET",
+        "https://images.example.org/item.png",
+        headers={"Host": "images.example.org"},
+    )
     response = await transport.handle_async_request(request)
 
     assert captured["host"] == b"images.example.org"
