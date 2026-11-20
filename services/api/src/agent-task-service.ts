@@ -217,10 +217,11 @@ export async function failAgentTask(prisma: PrismaClient, taskId: string, worker
 }
 
 /** Cancellation is an internal privileged operation; expose it only behind server-side RBAC. */
-export async function cancelAgentTask(prisma: PrismaClient, taskId: string, ownerId: string) {
+export async function cancelAgentTask(prisma: PrismaClient, taskId: string, ownerId: string, tenantId: string) {
+  if (!ownerId.trim() || !tenantId.trim()) throw new Error("TASK_OWNER_REQUIRED");
   return prisma.$transaction(async (tx) => {
     const changed = await tx.agentTask.updateMany({
-      where: { id: taskId, ownerId, status: { in: ["QUEUED", "CHECKPOINTED"] } },
+      where: { id: taskId, ownerId, tenantId, status: { in: ["QUEUED", "CHECKPOINTED"] } },
       data: { status: "CANCELLED", finishedAt: new Date(), lockedBy: null, leaseUntil: null },
     });
     if (changed.count !== 1) throw new Error("TASK_NOT_CANCELLABLE");
