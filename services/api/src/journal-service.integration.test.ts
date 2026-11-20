@@ -22,7 +22,7 @@ suite("double-entry journal (PostgreSQL)", () => {
 
   afterAll(async () => {
     await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw\`SELECT set_config('app.journal_maintenance', 'on', true)\`;
+      await tx.$executeRaw`SELECT set_config('app.journal_maintenance', 'on', true)`;
       if (transactionIds.length) {
         await tx.journalEntry.deleteMany({ where: { transactionId: { in: transactionIds } } });
         await tx.journalTransaction.deleteMany({ where: { id: { in: transactionIds } } });
