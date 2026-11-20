@@ -15,6 +15,7 @@ const createdDealIds: string[] = [];
 const createdTaskIds: string[] = [];
 let app: FastifyInstance;
 let adminEmail: string;
+let secondaryAdminEmail: string;
 let viewerEmail: string;
 let sequence = 0;
 
@@ -70,6 +71,7 @@ suite("authenticated deal review routes (RBAC)", () => {
 
   beforeEach(async () => {
     adminEmail = await createUser("ADMIN");
+    secondaryAdminEmail = await createUser("ADMIN");
     viewerEmail = await createUser("VIEWER");
   });
 
@@ -128,6 +130,16 @@ suite("authenticated deal review routes (RBAC)", () => {
     expect(status.statusCode).toBe(200);
     expect(status.json().status).toBe("QUEUED");
     expect(status.json().result).toBeNull();
+
+    // ADMIN is a role, not a cross-owner data-access override.
+    const otherAdmin = await login(secondaryAdminEmail);
+    const crossOwnerStatus = await app.inject({
+      method: "GET",
+      url: "/v1/treasure-analyses/" + queued.taskId,
+      headers: { authorization: "Bearer " + otherAdmin.accessToken },
+    });
+    expect(crossOwnerStatus.statusCode).toBe(404);
+    expect(crossOwnerStatus.json()).toEqual({ error: "AGENT_TASK_NOT_FOUND" });
   });
 
   it("rejects reuse of a treasure-analysis idempotency key with different input", async () => {
