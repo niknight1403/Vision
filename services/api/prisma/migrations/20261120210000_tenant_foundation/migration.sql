@@ -37,7 +37,7 @@ SELECT 'personal_' || u.id, 'Personal workspace', CURRENT_TIMESTAMP FROM "User" 
 
 INSERT INTO "TenantMembership" ("id", "tenantId", "userId", "role", "updatedAt")
 SELECT 'membership_' || u.id, 'personal_' || u.id, u.id,
-       CASE WHEN u.role = 'ADMIN' THEN 'OWNER'::"TenantRole" ELSE 'OWNER'::"TenantRole" END,
+       'OWNER'::"TenantRole",
        CURRENT_TIMESTAMP
 FROM "User" u;
 
