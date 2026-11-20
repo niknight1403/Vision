@@ -76,7 +76,7 @@ export async function postJournalTransaction(prisma: PrismaClient, input: PostJo
           if (existing.payloadHash !== normalized.payloadHash) throw new Error("JOURNAL_IDEMPOTENCY_CONFLICT");
           return existing;
         }
-        return tx.journalTransaction.create({
+        const created = await tx.journalTransaction.create({
           data: {
             tenantId: normalized.tenantId,
             referenceId: normalized.referenceId,
@@ -85,8 +85,17 @@ export async function postJournalTransaction(prisma: PrismaClient, input: PostJo
             payloadHash: normalized.payloadHash,
             entries: { create: normalized.entries },
           },
-          include: { entries: true },
+          select: { id: true },
         });
+        // The database permits exactly this one-way transition. A deferred
+        // constraint trigger verifies the final entry set at transaction commit.
+        await tx.journalTransaction.update({
+          where: { id: created.id },
+          data: { postedAt: new Date() },
+        });
+        const posted = await findExisting(tx);
+        if (!posted) throw new Error("JOURNAL_POSTING_NOT_FOUND_AFTER_FINALIZATION");
+        return posted;
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     } catch (error) {
       const code = knownRequestCode(error);
