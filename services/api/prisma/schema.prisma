@@ -392,6 +392,7 @@ model JournalTransaction {
   currency    String         @db.VarChar(3)
   description String
   payloadHash String         @db.VarChar(64)
+  postedAt    DateTime?
   createdAt   DateTime       @default(now())
   entries     JournalEntry[]
 
