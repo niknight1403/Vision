@@ -1,4 +1,5 @@
 import { Prisma, PrismaClient } from "@prisma/client";
+import { processOutboxEventInTransaction, type TransactionalOutboxConsumer } from "./outbox-inbox.js";
 
 export type OutboxMessage = {
   id: string; eventType: string; aggregateId: string; correlationId: string | null;
@@ -112,5 +113,39 @@ export async function processOneOutboxMessage(
     if (error instanceof Error && error.message === "OUTBOX_LEASE_LOST") throw error;
     await markFailed(prisma, message, normalizedOptions, error);
     return message.attempts >= (normalizedOptions.maxAttempts ?? 8) ? "DEAD_LETTER" : "RETRY_SCHEDULED";
+  }
+}
+
+
+/**
+ * Runs a database-only consumer with a durable inbox receipt. Consumer writes
+ * and receipt commit atomically; the outbox acknowledgement follows. If the
+ * process crashes between those commits, redelivery is a safe DUPLICATE.
+ * Do not use this helper for remote side effects; those need provider-level
+ * idempotency and reconciliation.
+ */
+export async function processOneOutboxMessageWithInbox(
+  prisma: PrismaClient,
+  options: WorkerOptions,
+  consumerName: string,
+  handler: TransactionalOutboxConsumer,
+): Promise<"IDLE" | "PUBLISHED" | "RETRY_SCHEDULED" | "DEAD_LETTER"> {
+  const workerId = validateWorkerOptions(options);
+  const normalizedOptions = { ...options, workerId };
+  const message = await claimOutboxMessage(prisma, normalizedOptions);
+  if (!message) return "IDLE";
+
+  try {
+    await prisma.$transaction((tx) =>
+      processOutboxEventInTransaction(tx, consumerName, message, handler),
+    );
+    await markPublished(prisma, message.id, workerId);
+    return "PUBLISHED";
+  } catch (error) {
+    if (error instanceof Error && error.message === "OUTBOX_LEASE_LOST") throw error;
+    await markFailed(prisma, message, normalizedOptions, error);
+    return message.attempts >= (normalizedOptions.maxAttempts ?? 8)
+      ? "DEAD_LETTER"
+      : "RETRY_SCHEDULED";
   }
 }
