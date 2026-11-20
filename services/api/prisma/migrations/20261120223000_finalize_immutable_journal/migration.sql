@@ -15,7 +15,8 @@ BEGIN
       AND NEW."currency" = OLD."currency"
       AND NEW."description" = OLD."description"
       AND NEW."payloadHash" = OLD."payloadHash"
-      AND NEW."createdAt" = OLD."createdAt" THEN
+      AND NEW."createdAt" = OLD."createdAt"
+      AND NEW."updatedAt" >= OLD."updatedAt" THEN
       RETURN NEW;
     END IF;
     RAISE EXCEPTION 'journal records are immutable; post a compensating transaction'
