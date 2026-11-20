@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
-import { getJournalAccountBalance, postJournalTransaction, reconcileJournal } from "./journal-service.js";
+import { getJournalAccountBalance, postJournalTransaction, postJournalTransactionInTransaction, reconcileJournal } from "./journal-service.js";
 
 const databaseEnabled = Boolean(process.env.DATABASE_URL);
 const suite = describe.skipIf(!databaseEnabled);
@@ -84,6 +84,27 @@ suite("double-entry journal (PostgreSQL)", () => {
       ],
     })).rejects.toThrow("JOURNAL_IDEMPOTENCY_CONFLICT");
     expect(await prisma.journalTransaction.count({ where: { tenantId, referenceId: input.referenceId } })).toBe(1);
+  });
+
+  it("participates in a caller-owned transaction and rolls back with it", async () => {
+    const rollbackInput = posting("journal-caller-rollback");
+    await expect(prisma.$transaction(async (tx) => {
+      await postJournalTransactionInTransaction(tx, rollbackInput);
+      throw new Error("FORCE_OUTER_ROLLBACK");
+    }, { isolationLevel: "Serializable" })).rejects.toThrow("FORCE_OUTER_ROLLBACK");
+    expect(await prisma.journalTransaction.count({
+      where: { tenantId, referenceId: rollbackInput.referenceId },
+    })).toBe(0);
+
+    const committedInput = posting("journal-caller-commit");
+    const posted = await prisma.$transaction(
+      (tx) => postJournalTransactionInTransaction(tx, committedInput),
+      { isolationLevel: "Serializable" },
+    );
+    expect(posted.entries).toHaveLength(2);
+    expect(await prisma.journalTransaction.count({
+      where: { tenantId, referenceId: committedInput.referenceId },
+    })).toBe(1);
   });
 
   it("deduplicates concurrent identical postings under serializable isolation", async () => {
