@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import {
-  claimAgentTask, createAgentTask, failAgentTask, hashTaskInput, PermanentTaskError, recoverExpiredAgentTasks,
+  cancelAgentTask, claimAgentTask, createAgentTask, failAgentTask, hashTaskInput, PermanentTaskError, recoverExpiredAgentTasks,
 } from "./agent-task-service.js";
 
 const databaseEnabled = Boolean(process.env.DATABASE_URL);
@@ -10,6 +10,7 @@ const prisma = new PrismaClient();
 let ownerId = `task-retry-test-${process.pid}`;
 let tenantId = `task-retry-tenant-${process.pid}`;
 const taskIds: string[] = [];
+const auxiliaryTenantIds: string[] = [];
 let sequence = 0;
 
 suite("agent task retries (PostgreSQL)", () => {
@@ -29,6 +30,7 @@ suite("agent task retries (PostgreSQL)", () => {
       await prisma.outboxEvent.deleteMany({ where: { aggregateId: { in: taskIds } } });
       await prisma.agentTask.deleteMany({ where: { id: { in: taskIds } } });
     }
+    await prisma.tenant.deleteMany({ where: { id: { in: auxiliaryTenantIds } } });
     await prisma.tenant.delete({ where: { id: tenantId } });
     await prisma.user.delete({ where: { id: ownerId } });
     await prisma.$disconnect();
@@ -63,6 +65,20 @@ suite("agent task retries (PostgreSQL)", () => {
     await prisma.agentTask.update({ where: { id: task.id }, data: { availableAt: new Date(Date.now() - 1_000) } });
     const secondClaim = await claimAgentTask(prisma, task.id, "worker-retry-2");
     expect(secondClaim.attempt).toBe(2);
+  });
+
+  it("requires the matching tenant when cancelling an owned task", async () => {
+    const task = await createTask();
+    const otherTenant = await prisma.tenant.create({ data: { name: "Other cancellation workspace" } });
+    auxiliaryTenantIds.push(otherTenant.id);
+
+    await expect(cancelAgentTask(prisma, task.id, ownerId, otherTenant.id))
+      .rejects.toThrow("TASK_NOT_CANCELLABLE");
+    const unchanged = await prisma.agentTask.findUniqueOrThrow({ where: { id: task.id } });
+    expect(unchanged.status).toBe("QUEUED");
+
+    const cancelled = await cancelAgentTask(prisma, task.id, ownerId, tenantId);
+    expect(cancelled.status).toBe("CANCELLED");
   });
 
   it("marks a retryable error terminal at maxAttempts", async () => {
