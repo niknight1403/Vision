@@ -4,7 +4,7 @@ import helmet from "@fastify/helmet";
 import cors from "@fastify/cors";
 import type { DealCandidate, PrismaClient } from "@prisma/client";
 import { config } from "./config.js";
-import { authenticateBearerToken, requireAdmin, requireTenantAdmin, resolveTenantContext, type AuthenticatedPrincipal } from "./auth-service.js";
+import { authenticateBearerToken, requireTenantAdmin, resolveTenantContext, type AuthenticatedPrincipal } from "./auth-service.js";
 import { loginWithPassword, revokeRefreshToken, rotateRefreshToken } from "./auth-session-service.js";
 import { listDealCandidates, reviewDealCandidate } from "./deal-candidate-service.js";
 
@@ -35,12 +35,18 @@ const STATUS_BY_ERROR: Readonly<Record<string, number>> = Object.freeze({
   INVALID_REFRESH_TOKEN: 401,
   REFRESH_TOKEN_REUSE_OR_RACE: 401,
   ADMIN_ROLE_REQUIRED: 403,
+  TENANT_CONTEXT_REQUIRED: 400,
+  TENANT_ACCESS_DENIED: 404,
+  TENANT_ADMIN_ROLE_REQUIRED: 403,
   PASSWORD_POLICY_VIOLATION: 400,
   DEAL_CANDIDATE_NOT_FOUND: 404,
   DEAL_REVIEW_CONFLICT: 409,
   DEAL_NOT_ELIGIBLE_FOR_REVIEW_APPROVAL: 422,
   DEAL_REVIEW_FIELDS_REQUIRED: 400,
-  DEAL_LIST_LIMIT_INVALID: 400,\n  TENANT_CONTEXT_REQUIRED: 400,\n  TENANT_ACCESS_DENIED: 404,\n  TENANT_ADMIN_ROLE_REQUIRED: 403,
+  DEAL_LIST_LIMIT_INVALID: 400,
+  TENANT_CONTEXT_REQUIRED: 400,
+  TENANT_ACCESS_DENIED: 404,
+  TENANT_ADMIN_ROLE_REQUIRED: 403,
   VISION_INSPECTOR_NOT_CONFIGURED: 503,
   VISION_IMAGE_URL_REQUIRED: 400,
   TREASURE_ANALYSIS_IDEMPOTENCY_REQUIRED: 400,
@@ -101,7 +107,12 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     return reply.code(status).send({ error: code });
   }
 
-  async function tenantFrom(request: FastifyRequest, principal: AuthenticatedPrincipal) {\n    const requestedTenantId = request.headers["x-tenant-id"];\n    return await resolveTenantContext(prisma, principal, typeof requestedTenantId === "string" ? requestedTenantId : undefined);\n  }\n\n  async function principalFrom(request: FastifyRequest): Promise<AuthenticatedPrincipal> {
+  async function tenantFrom(request: FastifyRequest, principal: AuthenticatedPrincipal) {
+    const requestedTenantId = request.headers["x-tenant-id"];
+    return await resolveTenantContext(prisma, principal, typeof requestedTenantId === "string" ? requestedTenantId : undefined);
+  }
+
+  async function principalFrom(request: FastifyRequest): Promise<AuthenticatedPrincipal> {
     return await authenticateBearerToken(
       prisma,
       request.headers.authorization,
@@ -179,9 +190,24 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     } catch (error) { return fail(reply, error); }
   });
 
+  app.get("/v1/tenants", async (request, reply) => {
+    try {
+      const principal = await principalFrom(request);
+      const memberships = await prisma.tenantMembership.findMany({
+        where: { userId: principal.userId },
+        include: { tenant: { select: { id: true, name: true } } },
+        orderBy: { createdAt: "asc" },
+      });
+      return reply.code(200).send({ tenants: memberships.map((membership) => ({
+        id: membership.tenant.id, name: membership.tenant.name, role: membership.role,
+      })) });
+    } catch (error) { return fail(reply, error); }
+  });
+
   app.get("/v1/deals", async (request, reply) => {
     try {
-      await principalFrom(request);
+      const principal = await principalFrom(request);
+      const tenant = await tenantFrom(request, principal);
       const query = request.query as Record<string, unknown>;
       const reviewStatus = query.reviewStatus;
       if (reviewStatus !== undefined && !REVIEW_STATUSES.includes(reviewStatus as never)) {
@@ -203,11 +229,19 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
         limit = parsed;
       }
       const deals = await listDealCandidates(prisma, {
-        ...(reviewStatus === undefined ? {} : { reviewStatus: reviewStatus as (typeof REVIEW_STATUSES)[number] }),
         ...(riskPassed === undefined ? {} : { riskPassed }),
         ...(limit === undefined ? {} : { limit }),
       });
-      return reply.code(200).send({ deals: deals.map(serializeDeal) });
+      const reviews = await prisma.dealReview.findMany({
+        where: { tenantId: tenant.tenantId, candidateId: { in: deals.map((deal) => deal.id) } },
+      });
+      const reviewByCandidate = new Map(reviews.map((review) => [review.candidateId, review]));
+      const tenantDeals = deals.map((deal) => {
+        const review = reviewByCandidate.get(deal.id);
+        return { ...serializeDeal(deal), reviewStatus: review?.decision ?? "DISCOVERED",
+          reviewedBy: review?.reviewerUserId ?? null, reviewedAt: review?.reviewedAt.toISOString() ?? null };
+      }).filter((deal) => reviewStatus === undefined || deal.reviewStatus === reviewStatus);
+      return reply.code(200).send({ deals: tenantDeals });
     } catch (error) {
       return fail(reply, error);
     }
@@ -216,7 +250,8 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
   app.post("/v1/deals/:dealId/treasure-analysis", async (request, reply) => {
     try {
       const principal = await principalFrom(request);
-      requireAdmin(principal);
+      const tenant = await tenantFrom(request, principal);
+      requireTenantAdmin(tenant);
       const { dealId } = request.params as { dealId: string };
       const body = request.body as { imageUrl?: unknown } | undefined;
       const imageUrl = body?.imageUrl;
@@ -242,7 +277,7 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
       }
       const correlationId = randomUUID();
       const task = await prisma.$transaction(async (tx) => {
-        const created = await tx.agentTask.create({ data: { ownerId: principal.userId,
+        const created = await tx.agentTask.create({ data: { ownerId: principal.userId, tenantId: tenant.tenantId,
           taskType: "HIDDEN_TREASURE_ANALYSIS", status: "QUEUED", input, inputHash,
           correlationId, idempotencyKey, maxAttempts: 3 } });
         await tx.outboxEvent.create({ data: { eventType: "hidden_treasure.analysis.requested",
@@ -257,10 +292,13 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
   app.get("/v1/treasure-analyses/:taskId", async (request, reply) => {
     try {
       const principal = await principalFrom(request);
+      const tenant = await tenantFrom(request, principal);
       const { taskId } = request.params as { taskId: string };
-      const task = await prisma.agentTask.findUnique({ where: { id: taskId } });
-      if (!task || (task.ownerId !== principal.userId && principal.role !== "ADMIN") ||
-          task.taskType !== "HIDDEN_TREASURE_ANALYSIS") throw new Error("AGENT_TASK_NOT_FOUND");
+      const task = await prisma.agentTask.findFirst({ where: {
+        id: taskId, tenantId: tenant.tenantId, ownerId: principal.userId,
+        taskType: "HIDDEN_TREASURE_ANALYSIS",
+      } });
+      if (!task) throw new Error("AGENT_TASK_NOT_FOUND");
       return reply.code(200).send({ taskId: task.id, status: task.status, result: task.result,
         correlationId: task.correlationId, attempt: task.attempt,
         createdAt: task.createdAt.toISOString(), updatedAt: task.updatedAt.toISOString(),
@@ -270,7 +308,8 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
   app.post("/v1/deals/:dealId/vision-inspection", async (request, reply) => {
     try {
       const principal = await principalFrom(request);
-      requireAdmin(principal);
+      const tenant = await tenantFrom(request, principal);
+      requireTenantAdmin(tenant);
       if (!dependencies.visionInspector) throw new Error("VISION_INSPECTOR_NOT_CONFIGURED");
       const { dealId } = request.params as { dealId: string };
       const body = request.body as { imageUrl?: unknown } | undefined;
