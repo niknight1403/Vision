@@ -136,7 +136,7 @@ The API outbox worker currently provides:
 
 Operational limitations are intentional and must remain visible:
 
-- There is no authenticated dead-letter inspection/replay API, operator UI, alerting integration, or durable consumer inbox in this change.
+- There is no authenticated dead-letter inspection/replay API, operator UI, or alerting integration. A durable database consumer inbox and a read-only reconciliation report now exist as internal primitives; they are not an operator-facing production control.
 - Do not replay by editing database rows manually. A replay workflow must require tenant-aware authorization, an auditable operator identity/reason, a fresh lease, preserved original event identity, and consumer deduplication.
 - A dead-letter event must remain retained for investigation; no automatic deletion or silent reset to PENDING.
 - A handler side effect may succeed before the worker loses its lease or crashes. Therefore transport delivery cannot promise exactly-once effects; only idempotent consumers can prevent duplicate business effects.
@@ -146,7 +146,16 @@ Required follow-up before production dispatch:
 1. Add authenticated read-only queue health/dead-letter visibility with tenant-safe redaction.
 2. Add explicit, audited replay command with approval and idempotency checks; do not expose a generic status mutation.
 3. Add metrics for pending age/count, processing leases, retry rate, dead-letter count, publish latency, and lease loss.
-4. Add consumer inbox/deduplication keyed by stable provider/event identity for any handler with external side effects.
+4. Apply the durable consumer inbox to every database-only consumer and use provider-level idempotency plus reconciliation for remote side effects.
 5. Add tests for expired-lease reclaim, replay authorization, duplicate consumer delivery, and alert thresholds.
 
 Until those controls exist, this worker is an internal integration primitive, not an approved production payment or settlement dispatcher.
+
+
+## 11. Wallet-to-journal reconciliation implementation boundary
+
+`reconcileWalletJournalEvidence` is a read-only comparison primitive. It accepts wallet ledger evidence, journal evidence, and a policy record keyed by wallet ledger row ID. Each policy must explicitly supply the journal reference and the exact expected debit/credit lines. The comparison is tenant-scoped and checks posting state, currency, balanced totals, and exact line equality.
+
+The primitive deliberately does not infer a journal reference from a wallet reference, derive account codes, or assume that a reservation/release is an expense, liability, asset, or settlement. A row without an approved policy is reported as `POLICY_NOT_CONFIGURED` rather than treated as a missing journal. It does not create, repair, reverse, or post journal entries.
+
+Before wiring this into an automated tenant reconciliation job, the finance owner must approve the policy map for each applicable wallet ledger event type and specify how policy versions are retained. Current tests exercise configured, missing-policy, tenant-isolation, unposted, currency, balance, and line-mismatch cases. This is evidence comparison only; it does not enable payment, funding, payout, or live trading.
