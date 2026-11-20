@@ -208,7 +208,7 @@ suite("authenticated deal review routes (RBAC)", () => {
     const response = await app.inject({
       method: "POST",
       url: `/v1/deals/${deal.id}/review`,
-      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(adminEmail) },
+      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(viewerEmail) },
       payload: { decision: "APPROVED" },
     });
     expect(response.statusCode).toBe(403);
@@ -222,7 +222,7 @@ suite("authenticated deal review routes (RBAC)", () => {
     const first = await app.inject({
       method: "POST",
       url: `/v1/deals/${deal.id}/review`,
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(adminEmail) },
       payload: { decision: "APPROVED" },
     });
     expect(first.statusCode).toBe(200);
