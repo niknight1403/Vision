@@ -156,14 +156,6 @@ async def test_pinned_backend_refuses_different_host_and_port():
 async def test_transport_keeps_original_host_header_and_tls_origin():
     captured = {}
 
-    class EmptyCoreStream:
-        async def __aiter__(self):
-            if False:
-                yield b""
-
-        async def aclose(self):
-            return None
-
     transport = PinnedAsyncHTTPTransport("images.example.org", ["93.184.216.34"])
 
     async def fake_send(core_request):
@@ -172,7 +164,7 @@ async def test_transport_keeps_original_host_header_and_tls_origin():
         return httpcore.Response(
             status=200,
             headers=[(b"content-type", b"image/png")],
-            stream=EmptyCoreStream(),
+            content=b"",
         )
 
     transport._pool.handle_async_request = fake_send
