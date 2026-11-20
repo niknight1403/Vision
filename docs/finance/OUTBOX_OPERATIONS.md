@@ -23,6 +23,21 @@ The outbox worker exposes `processOneOutboxMessageWithInbox` for database-only c
 
 This inbox protects transactional database effects only. It does not make remote HTTP/payment/provider side effects exactly-once, and it is not automatically wired into every `processOneOutboxMessage` handler. Financial consumers must explicitly use the transactional helper; remote effects still require downstream idempotency keyed by immutable event ID, reconciliation, and a carefully designed dispatch boundary.
 
+## Read-only reconciliation
+
+`reconcileOutbox(prisma, options)` returns a bounded, metadata-only report. It does not update events, reclaim leases, replay dead letters, or create missing receipts. The query deliberately excludes payloads. Use a bounded `limit` (default 1,000; maximum 10,000) and optionally a `since` timestamp when reviewing a large event history.
+
+The report checks:
+- PROCESSING rows with incomplete lease metadata and expired leases;
+- non-PROCESSING rows that still carry a worker lock or lease;
+- PUBLISHED rows without `publishedAt`;
+- PUBLISHED rows missing a receipt for a consumer explicitly listed in `expectedConsumers[eventType]`;
+- DEAD_LETTER rows and overdue PENDING rows.
+
+The required-consumer map is an explicit operational contract supplied by the caller. An event type absent from that map has no receipt completeness assertion; the tool does not guess which consumers should receive an event. A missing receipt is reported as a discrepancy, not repaired automatically. A PROCESSING event with an existing receipt may represent the crash window after consumer commit and before outbox acknowledgement; the inbox-aware worker safely handles redelivery.
+
+The report contains event IDs, event types, finding codes, severities and counts only. It is an investigation aid, not proof of downstream provider settlement or external side-effect completion. Remote systems still require their own idempotency and reconciliation.
+
 ## Required operational signals
 
 Export counters and gauges from the worker/DB observer (do not log payloads):
