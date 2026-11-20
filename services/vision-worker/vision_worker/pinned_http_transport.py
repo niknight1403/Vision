@@ -97,7 +97,7 @@ class PinnedAsyncHTTPTransport(httpx.AsyncBaseTransport):
         if (
             request.url.scheme != "https"
             or request.url.host.rstrip(".").lower() != self._hostname
-            or request.url.port != 443
+            or (request.url.port or 443) != 443
         ):
             raise httpx.ConnectError("Pinned transport refused an unexpected origin", request=request)
 
@@ -106,7 +106,7 @@ class PinnedAsyncHTTPTransport(httpx.AsyncBaseTransport):
             url=httpcore.URL(
                 scheme=request.url.raw_scheme,
                 host=request.url.raw_host,
-                port=request.url.port,
+                port=request.url.port or 443,
                 target=request.url.raw_path,
             ),
             headers=request.headers.raw,
