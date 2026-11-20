@@ -245,7 +245,7 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
       const principal = await principalFrom(request);
       const { taskId } = request.params as { taskId: string };
       const task = await prisma.agentTask.findUnique({ where: { id: taskId } });
-      if (!task || (task.ownerId !== principal.userId && principal.role !== "ADMIN") ||
+      if (!task || task.ownerId !== principal.userId ||
           task.taskType !== "HIDDEN_TREASURE_ANALYSIS") throw new Error("AGENT_TASK_NOT_FOUND");
       return reply.code(200).send({ taskId: task.id, status: task.status, result: task.result,
         correlationId: task.correlationId, attempt: task.attempt,

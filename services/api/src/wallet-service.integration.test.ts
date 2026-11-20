@@ -6,6 +6,7 @@ const databaseEnabled = Boolean(process.env.DATABASE_URL);
 const suite = describe.skipIf(!databaseEnabled);
 const prisma = new PrismaClient();
 let accountId: string;
+let ownerId: string;
 let ownerSequence = 0;
 
 suite("wallet reservation release invariants (PostgreSQL)", () => {
@@ -15,8 +16,9 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
 
   beforeEach(async () => {
     ownerSequence += 1;
+    ownerId = `wallet-release-test-${process.pid}-${ownerSequence}`;
     const account = await prisma.walletAccount.create({
-      data: { ownerId: `wallet-release-test-${process.pid}-${ownerSequence}`, currency: "EUR", balanceCents: 20_000n },
+      data: { ownerId, currency: "EUR", balanceCents: 20_000n },
     });
     accountId = account.id;
   });
@@ -28,12 +30,27 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     }
   });
 
+  it("rejects wallet operations when the caller does not own the account", async () => {
+    await expect(reserveFunds(prisma, {
+      accountId, ownerId: ownerId + "-other", amountCents: 1_000n,
+      referenceId: "reservation-wrong-owner", description: "wrong owner",
+    })).rejects.toThrow("WALLET_NOT_FOUND");
+    await expect(releaseFunds(prisma, {
+      accountId, ownerId: ownerId + "-other", amountCents: 1_000n,
+      referenceId: "release-wrong-owner", reservationReferenceId: "missing-reservation",
+      description: "wrong owner",
+    })).rejects.toThrow("WALLET_NOT_FOUND");
+    const account = await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } });
+    expect(account.reservedCents).toBe(0n);
+    expect(await prisma.walletLedger.count({ where: { accountId } })).toBe(0);
+  });
+
   it("binds an idempotent release to its source reservation", async () => {
     await reserveFunds(prisma, {
-      accountId, amountCents: 4_000n, referenceId: "reservation-idempotent", description: "test reservation",
+      accountId, ownerId, amountCents: 4_000n, referenceId: "reservation-idempotent", description: "test reservation",
     });
     const input = {
-      accountId, amountCents: 4_000n, referenceId: "release-idempotent",
+      accountId, ownerId, amountCents: 4_000n, referenceId: "release-idempotent",
       reservationReferenceId: "reservation-idempotent", description: "test release",
     };
     const first = await releaseFunds(prisma, input);
@@ -47,18 +64,18 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
 
   it("prevents a second release from consuming another reservation's reserved funds", async () => {
     await reserveFunds(prisma, {
-      accountId, amountCents: 4_000n, referenceId: "reservation-a", description: "reservation A",
+      accountId, ownerId, amountCents: 4_000n, referenceId: "reservation-a", description: "reservation A",
     });
     await reserveFunds(prisma, {
-      accountId, amountCents: 5_000n, referenceId: "reservation-b", description: "reservation B",
+      accountId, ownerId, amountCents: 5_000n, referenceId: "reservation-b", description: "reservation B",
     });
     await releaseFunds(prisma, {
-      accountId, amountCents: 4_000n, referenceId: "release-a-1",
+      accountId, ownerId, amountCents: 4_000n, referenceId: "release-a-1",
       reservationReferenceId: "reservation-a", description: "first release A",
     });
 
     await expect(releaseFunds(prisma, {
-      accountId, amountCents: 4_000n, referenceId: "release-a-2",
+      accountId, ownerId, amountCents: 4_000n, referenceId: "release-a-2",
       reservationReferenceId: "reservation-a", description: "duplicate release A",
     })).rejects.toThrow("RESERVATION_RELEASE_EXCEEDS_ORIGINAL_AMOUNT");
 
@@ -68,25 +85,25 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
 
   it("rejects releases that point to a different account or amount", async () => {
     await reserveFunds(prisma, {
-      accountId, amountCents: 3_000n, referenceId: "reservation-mismatch", description: "reservation",
+      accountId, ownerId, amountCents: 3_000n, referenceId: "reservation-mismatch", description: "reservation",
     });
     await expect(releaseFunds(prisma, {
-      accountId, amountCents: 2_000n, referenceId: "release-mismatch",
+      accountId, ownerId, amountCents: 2_000n, referenceId: "release-mismatch",
       reservationReferenceId: "reservation-mismatch", description: "mismatched partial release",
     })).rejects.toThrow("ORIGINAL_RESERVATION_NOT_FOUND_OR_MISMATCHED");
   });
 
   it("allows at most one concurrent full release", async () => {
     await reserveFunds(prisma, {
-      accountId, amountCents: 2_000n, referenceId: "reservation-race", description: "reservation",
+      accountId, ownerId, amountCents: 2_000n, referenceId: "reservation-race", description: "reservation",
     });
     const results = await Promise.allSettled([
       releaseFunds(prisma, {
-        accountId, amountCents: 2_000n, referenceId: "release-race-a",
+        accountId, ownerId, amountCents: 2_000n, referenceId: "release-race-a",
         reservationReferenceId: "reservation-race", description: "release A",
       }),
       releaseFunds(prisma, {
-        accountId, amountCents: 2_000n, referenceId: "release-race-b",
+        accountId, ownerId, amountCents: 2_000n, referenceId: "release-race-b",
         reservationReferenceId: "reservation-race", description: "release B",
       }),
     ]);

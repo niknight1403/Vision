@@ -4,6 +4,7 @@ type Db = PrismaClient | Prisma.TransactionClient;
 
 export type ReserveFundsInput = {
   accountId: string;
+  ownerId: string;
   amountCents: bigint;
   referenceId: string;
   correlationId?: string;
@@ -22,8 +23,8 @@ function assertPositiveAmount(amount: bigint): void {
   if (amount <= 0n) throw new Error("AMOUNT_MUST_BE_POSITIVE");
 }
 
-async function snapshot(db: Db, accountId: string): Promise<WalletSnapshot> {
-  const account = await db.walletAccount.findUnique({ where: { id: accountId } });
+async function snapshot(db: Db, accountId: string, ownerId: string): Promise<WalletSnapshot> {
+  const account = await db.walletAccount.findFirst({ where: { id: accountId, ownerId } });
   if (!account) throw new Error("WALLET_NOT_FOUND");
   return {
     accountId: account.id,
@@ -43,12 +44,13 @@ export async function reserveFunds(
   input: ReserveFundsInput,
 ): Promise<WalletSnapshot> {
   assertPositiveAmount(input.amountCents);
+  if (!input.ownerId.trim()) throw new Error("WALLET_OWNER_REQUIRED");
   if (!input.referenceId.trim()) throw new Error("REFERENCE_ID_REQUIRED");
 
   return prisma.$transaction(async (tx) => {
     // Lock the account row so concurrent reservations cannot spend the same balance.
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
-      SELECT id FROM "WalletAccount" WHERE id = ${input.accountId} FOR UPDATE
+      SELECT id FROM "WalletAccount" WHERE id = ${input.accountId} AND "ownerId" = ${input.ownerId} FOR UPDATE
     `;
     if (rows.length === 0) throw new Error("WALLET_NOT_FOUND");
 
@@ -61,10 +63,10 @@ export async function reserveFunds(
           existing.amountCents !== input.amountCents) {
         throw new Error("IDEMPOTENCY_CONFLICT");
       }
-      return snapshot(tx, input.accountId);
+      return snapshot(tx, input.accountId, input.ownerId);
     }
 
-    const account = await tx.walletAccount.findUnique({ where: { id: input.accountId } });
+    const account = await tx.walletAccount.findFirst({ where: { id: input.accountId, ownerId: input.ownerId } });
     if (!account) throw new Error("WALLET_NOT_FOUND");
     const available = account.balanceCents - account.reservedCents;
     if (available < input.amountCents) throw new Error("INSUFFICIENT_AVAILABLE_FUNDS");
@@ -83,12 +85,13 @@ export async function reserveFunds(
         description: input.description,
       },
     });
-    return snapshot(tx, input.accountId);
+    return snapshot(tx, input.accountId, input.ownerId);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 
 export type ReleaseFundsInput = {
   accountId: string;
+  ownerId: string;
   amountCents: bigint;
   referenceId: string;
   reservationReferenceId: string;
@@ -102,12 +105,13 @@ export async function releaseFunds(
   input: ReleaseFundsInput,
 ): Promise<WalletSnapshot> {
   assertPositiveAmount(input.amountCents);
+  if (!input.ownerId.trim()) throw new Error("WALLET_OWNER_REQUIRED");
   if (!input.referenceId.trim()) throw new Error("REFERENCE_ID_REQUIRED");
   if (!input.reservationReferenceId.trim()) throw new Error("RESERVATION_REFERENCE_REQUIRED");
 
   return prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
-      SELECT id FROM "WalletAccount" WHERE id = ${input.accountId} FOR UPDATE
+      SELECT id FROM "WalletAccount" WHERE id = ${input.accountId} AND "ownerId" = ${input.ownerId} FOR UPDATE
     `;
     if (rows.length === 0) throw new Error("WALLET_NOT_FOUND");
 
@@ -119,7 +123,7 @@ export async function releaseFunds(
           existing.reservationReferenceId !== input.reservationReferenceId) {
         throw new Error("IDEMPOTENCY_CONFLICT");
       }
-      return snapshot(tx, input.accountId);
+      return snapshot(tx, input.accountId, input.ownerId);
     }
 
     const originalReservation = await tx.walletLedger.findUnique({
@@ -141,7 +145,7 @@ export async function releaseFunds(
     if (alreadyReleasedCents + input.amountCents > originalReservation.amountCents) {
       throw new Error("RESERVATION_RELEASE_EXCEEDS_ORIGINAL_AMOUNT");
     }
-    const account = await tx.walletAccount.findUnique({ where: { id: input.accountId } });
+    const account = await tx.walletAccount.findFirst({ where: { id: input.accountId, ownerId: input.ownerId } });
     if (!account) throw new Error("WALLET_NOT_FOUND");
     if (account.reservedCents < input.amountCents) throw new Error("RESERVATION_BALANCE_TOO_LOW");
 
@@ -160,6 +164,6 @@ export async function releaseFunds(
         description: input.description,
       },
     });
-    return snapshot(tx, input.accountId);
+    return snapshot(tx, input.accountId, input.ownerId);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
