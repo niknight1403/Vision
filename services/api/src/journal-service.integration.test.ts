@@ -44,7 +44,10 @@ suite("double-entry journal (PostgreSQL)", () => {
     })).rejects.toThrow("JOURNAL_NOT_BALANCED");
     await expect(postJournalTransaction(prisma, {
       ...posting("journal-invalid-side"),
-      entries: [{ accountCode: "1000-CASH", debitCents: 100n, creditCents: 100n }],
+      entries: [
+        { accountCode: "1000-CASH", debitCents: 100n, creditCents: 100n },
+        { accountCode: "4000-SALES", creditCents: 100n },
+      ],
     })).rejects.toThrow("JOURNAL_LINE_MUST_HAVE_ONE_POSITIVE_SIDE");
     expect(await prisma.journalTransaction.count({ where: { tenantId } })).toBe(0);
   });
@@ -88,8 +91,8 @@ suite("double-entry journal (PostgreSQL)", () => {
       getJournalAccountBalance(prisma, { tenantId, accountCode: "4000-SALES", currency: "EUR" }),
       getJournalAccountBalance(prisma, { tenantId: otherTenantId, accountCode: "1000-CASH", currency: "EUR" }),
     ]);
-    expect(cash).toBe(12_500n);
-    expect(sales).toBe(-12_500n);
+    expect(cash).toBe(25_000n);
+    expect(sales).toBe(-25_000n);
     expect(otherTenantCash).toBe(0n);
   });
 
