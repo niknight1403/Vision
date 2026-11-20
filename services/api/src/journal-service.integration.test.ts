@@ -83,16 +83,22 @@ suite("double-entry journal (PostgreSQL)", () => {
   });
 
   it("calculates account balances and isolates them by tenant", async () => {
-    const input = posting("journal-balance");
+    const input = {
+      ...posting("journal-balance"),
+      entries: [
+        { accountCode: "BALANCE-CASH", debitCents: 12_500n },
+        { accountCode: "BALANCE-SALES", creditCents: 12_500n },
+      ],
+    };
     const transaction = await postJournalTransaction(prisma, input);
     transactionIds.push(transaction.id);
     const [cash, sales, otherTenantCash] = await Promise.all([
-      getJournalAccountBalance(prisma, { tenantId, accountCode: "1000-CASH", currency: "EUR" }),
-      getJournalAccountBalance(prisma, { tenantId, accountCode: "4000-SALES", currency: "EUR" }),
-      getJournalAccountBalance(prisma, { tenantId: otherTenantId, accountCode: "1000-CASH", currency: "EUR" }),
+      getJournalAccountBalance(prisma, { tenantId, accountCode: "BALANCE-CASH", currency: "EUR" }),
+      getJournalAccountBalance(prisma, { tenantId, accountCode: "BALANCE-SALES", currency: "EUR" }),
+      getJournalAccountBalance(prisma, { tenantId: otherTenantId, accountCode: "BALANCE-CASH", currency: "EUR" }),
     ]);
-    expect(cash).toBe(25_000n);
-    expect(sales).toBe(-25_000n);
+    expect(cash).toBe(12_500n);
+    expect(sales).toBe(-12_500n);
     expect(otherTenantCash).toBe(0n);
   });
 
