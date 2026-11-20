@@ -37,7 +37,11 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
       await prisma.outboxEvent.deleteMany({ where: { aggregateId: accountId } });
       await prisma.walletLedger.deleteMany({ where: { accountId } });
       await prisma.walletAccount.deleteMany({ where: { id: accountId } });
-      await prisma.tenant.delete({ where: { id: tenantId } });
+      await prisma.tenantMembership.deleteMany({ where: { tenantId, userId: ownerId } });
+      const hasImmutableJournal = await prisma.journalTransaction.count({ where: { tenantId } });
+      if (hasImmutableJournal === 0) {
+        await prisma.tenant.delete({ where: { id: tenantId } });
+      }
       await prisma.user.delete({ where: { id: ownerId } });
     }
   });
