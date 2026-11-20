@@ -92,6 +92,16 @@ suite("double-entry journal (PostgreSQL)", () => {
     await expect(prisma.journalTransaction.update({
       where: { id: transaction.id }, data: { description: "tampered" },
     })).rejects.toThrow();
+    await expect(prisma.journalEntry.create({
+      data: {
+        transactionId: transaction.id,
+        accountCode: "9999-LATE-INSERT",
+        debitCents: 1n,
+        creditCents: 0n,
+      },
+    })).rejects.toThrow();
+    await expect(prisma.$executeRawUnsafe('TRUNCATE TABLE "JournalEntry"')).rejects.toThrow();
+    expect(await prisma.journalEntry.count({ where: { transactionId: transaction.id } })).toBe(2);
   });
 
   it("calculates account balances and isolates them by tenant", async () => {
