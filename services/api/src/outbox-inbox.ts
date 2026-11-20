@@ -24,16 +24,11 @@ export async function processOutboxEventInTransaction(
   }
   if (!message.id.trim()) throw new Error("OUTBOX_EVENT_ID_REQUIRED");
 
-  try {
-    await tx.outboxConsumerReceipt.create({
-      data: { consumerName: normalizedConsumer, eventId: message.id },
-    });
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      return "DUPLICATE";
-    }
-    throw error;
-  }
+  const receipt = await tx.outboxConsumerReceipt.createMany({
+    data: [{ consumerName: normalizedConsumer, eventId: message.id }],
+    skipDuplicates: true,
+  });
+  if (receipt.count === 0) return "DUPLICATE";
 
   await handler(tx, message);
   return "PROCESSED";
