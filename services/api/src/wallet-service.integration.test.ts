@@ -114,7 +114,7 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
       }),
     ]);
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    expect(await prisma.walletLedger.count({ where: { accountId, ...walletScope(), entryType: "RESERVATION_RELEASE" } })).toBe(1);
+    expect(await prisma.walletLedger.count({ where: { accountId, entryType: "RESERVATION_RELEASE" } })).toBe(1);
     const account = await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } });
     expect(account.reservedCents).toBe(0n);
   });
