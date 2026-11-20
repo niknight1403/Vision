@@ -252,6 +252,50 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     })).rejects.toThrow("ORIGINAL_RESERVATION_NOT_FOUND_OR_MISMATCHED");
   });
 
+  it("deduplicates concurrent reservations with the same idempotency key", async () => {
+    const input = {
+      accountId, ...walletScope(), amountCents: 2_500n,
+      referenceId: "reservation-concurrent-idempotent",
+      description: "concurrent idempotent reservation",
+    };
+    const results = await Promise.allSettled([
+      reserveFunds(prisma, input),
+      reserveFunds(prisma, input),
+    ]);
+
+    expect(results.every((result) => result.status === "fulfilled")).toBe(true);
+    expect(await prisma.walletLedger.count({
+      where: { accountId, referenceId: input.referenceId, entryType: "RESERVATION" },
+    })).toBe(1);
+    expect(await prisma.outboxEvent.count({
+      where: { aggregateId: accountId, eventType: "wallet.reservation.created", correlationId: input.referenceId },
+    })).toBe(1);
+    const wallet = await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } });
+    expect(wallet.reservedCents).toBe(input.amountCents);
+  });
+
+  it("rejects concurrent reservations that reuse an idempotency key with different payloads", async () => {
+    const common = {
+      accountId, ...walletScope(), referenceId: "reservation-concurrent-conflict",
+    };
+    const results = await Promise.allSettled([
+      reserveFunds(prisma, { ...common, amountCents: 1_500n, description: "payload A" }),
+      reserveFunds(prisma, { ...common, amountCents: 2_000n, description: "payload B" }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const ledger = await prisma.walletLedger.findUniqueOrThrow({
+      where: { referenceId: common.referenceId },
+    });
+    expect([1_500n, 2_000n]).toContain(ledger.amountCents);
+    const wallet = await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } });
+    expect(wallet.reservedCents).toBe(ledger.amountCents);
+    expect(await prisma.outboxEvent.count({
+      where: { aggregateId: accountId, eventType: "wallet.reservation.created", correlationId: common.referenceId },
+    })).toBe(1);
+  });
+
   it("allows at most one concurrent full release", async () => {
     await reserveFunds(prisma, {
       accountId, ...walletScope(), amountCents: 2_000n, referenceId: "reservation-race", description: "reservation",
