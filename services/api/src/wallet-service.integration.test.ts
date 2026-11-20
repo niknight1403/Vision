@@ -68,6 +68,48 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     expect(entry.reservationReferenceId).toBe("reservation-idempotent");
   });
 
+  it("supports multiple partial releases up to the original reservation amount", async () => {
+    await reserveFunds(prisma, {
+      accountId, ...walletScope(), amountCents: 5_000n, referenceId: "reservation-partial", description: "partial release reservation",
+    });
+    const first = await releaseFunds(prisma, {
+      accountId, ...walletScope(), amountCents: 1_500n, referenceId: "release-partial-1",
+      reservationReferenceId: "reservation-partial", description: "first partial release",
+    });
+    expect(first.reservedCents).toBe(3_500n);
+
+    const second = await releaseFunds(prisma, {
+      accountId, ...walletScope(), amountCents: 2_000n, referenceId: "release-partial-2",
+      reservationReferenceId: "reservation-partial", description: "second partial release",
+    });
+    expect(second.reservedCents).toBe(1_500n);
+
+    const final = await releaseFunds(prisma, {
+      accountId, ...walletScope(), amountCents: 1_500n, referenceId: "release-partial-3",
+      reservationReferenceId: "reservation-partial", description: "complete reservation release",
+    });
+    expect(final.reservedCents).toBe(0n);
+    expect(await prisma.walletLedger.count({
+      where: { accountId, entryType: "RESERVATION_RELEASE", reservationReferenceId: "reservation-partial" },
+    })).toBe(3);
+  });
+
+  it("prevents cumulative partial releases from exceeding the original reservation", async () => {
+    await reserveFunds(prisma, {
+      accountId, ...walletScope(), amountCents: 4_000n, referenceId: "reservation-over-release", description: "reservation",
+    });
+    await releaseFunds(prisma, {
+      accountId, ...walletScope(), amountCents: 2_500n, referenceId: "release-over-1",
+      reservationReferenceId: "reservation-over-release", description: "first partial release",
+    });
+    await expect(releaseFunds(prisma, {
+      accountId, ...walletScope(), amountCents: 1_501n, referenceId: "release-over-2",
+      reservationReferenceId: "reservation-over-release", description: "over release",
+    })).rejects.toThrow("RESERVATION_RELEASE_EXCEEDS_ORIGINAL_AMOUNT");
+    const account = await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } });
+    expect(account.reservedCents).toBe(1_500n);
+  });
+
   it("prevents a second release from consuming another reservation's reserved funds", async () => {
     await reserveFunds(prisma, {
       accountId, ...walletScope(), amountCents: 4_000n, referenceId: "reservation-a", description: "reservation A",
@@ -81,7 +123,7 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     });
 
     await expect(releaseFunds(prisma, {
-      accountId, ...walletScope(), amountCents: 4_000n, referenceId: "release-a-2",
+      accountId, ...walletScope(), amountCents: 1n, referenceId: "release-a-2",
       reservationReferenceId: "reservation-a", description: "duplicate release A",
     })).rejects.toThrow("RESERVATION_RELEASE_EXCEEDS_ORIGINAL_AMOUNT");
 
@@ -89,13 +131,13 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     expect(account.reservedCents).toBe(5_000n);
   });
 
-  it("rejects releases that point to a different account or amount", async () => {
+  it("rejects releases that point to a different account or a non-reservation source", async () => {
     await reserveFunds(prisma, {
       accountId, ...walletScope(), amountCents: 3_000n, referenceId: "reservation-mismatch", description: "reservation",
     });
     await expect(releaseFunds(prisma, {
       accountId, ...walletScope(), amountCents: 2_000n, referenceId: "release-mismatch",
-      reservationReferenceId: "reservation-mismatch", description: "mismatched partial release",
+      reservationReferenceId: "reservation-does-not-exist", description: "mismatched source",
     })).rejects.toThrow("ORIGINAL_RESERVATION_NOT_FOUND_OR_MISMATCHED");
   });
 
