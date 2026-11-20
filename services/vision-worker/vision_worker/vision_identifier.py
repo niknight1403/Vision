@@ -12,6 +12,8 @@ import httpx
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, ValidationError
 
+from .pinned_http_transport import PinnedAsyncHTTPTransport
+
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 ALLOWED_IMAGE_TYPES = {
@@ -52,8 +54,8 @@ def _validate_image_url(image_url: str, allowed_hosts: set[str]) -> str:
     return host
 
 
-async def _reject_private_dns(host: str) -> None:
-    """Reject private/reserved DNS answers; network egress rules remain required."""
+async def _resolve_public_ips(host: str) -> tuple[str, ...]:
+    """Resolve once, reject the whole answer set if any address is non-public."""
     try:
         records = await asyncio.to_thread(
             socket.getaddrinfo, host, 443, type=socket.SOCK_STREAM
@@ -62,10 +64,22 @@ async def _reject_private_dns(host: str) -> None:
         raise InspectionError("Bildquelle konnte nicht aufgelöst werden.") from exc
     if not records:
         raise InspectionError("Bildquelle konnte nicht aufgelöst werden.")
+
+    addresses: list[str] = []
     for record in records:
-        address = ipaddress.ip_address(record[4][0])
+        try:
+            address = ipaddress.ip_address(record[4][0])
+        except (IndexError, ValueError) as exc:
+            raise InspectionError("Bildquelle lieferte eine ungültige IP-Adresse.") from exc
         if not address.is_global:
             raise InspectionError("Bildquelle verweist auf eine nicht öffentliche IP-Adresse.")
+        normalized = str(address)
+        if normalized not in addresses:
+            addresses.append(normalized)
+
+    if not addresses:
+        raise InspectionError("Bildquelle konnte nicht aufgelöst werden.")
+    return tuple(addresses)
 
 
 class VisionTreasureInspector:
@@ -77,7 +91,6 @@ class VisionTreasureInspector:
         client: AsyncOpenAI | None = None,
         allowed_hosts: set[str] | None = None,
         model: str | None = None,
-        http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self.allowed_hosts = {
             item.strip().lower().rstrip(".")
@@ -100,16 +113,8 @@ class VisionTreasureInspector:
         if fallback_url and fallback_key:
             self.fallback_client = AsyncOpenAI(api_key=fallback_key, base_url=fallback_url, timeout=60.0, max_retries=1)
             self._owns_fallback_client = True
-        self.http_client = http_client or httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0),
-            follow_redirects=False,
-            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
-        )
-        self._owns_http_client = http_client is None
 
     async def close(self) -> None:
-        if self._owns_http_client:
-            await self.http_client.aclose()
         if self._owns_openai_client:
             await self.client.close()
         if self._owns_fallback_client and self.fallback_client is not None:
@@ -117,29 +122,36 @@ class VisionTreasureInspector:
 
     async def download_image(self, image_url: str) -> tuple[str, bytes]:
         host = _validate_image_url(image_url, self.allowed_hosts)
-        await _reject_private_dns(host)
+        pinned_ips = await _resolve_public_ips(host)
+        transport = PinnedAsyncHTTPTransport(host, pinned_ips)
         try:
-            async with self.http_client.stream("GET", image_url) as response:
-                if response.status_code != 200:
-                    raise InspectionError("Bildquelle lieferte keinen erfolgreichen Status.")
-                content_type = response.headers.get("content-type", "").split(";")[0].lower()
-                if content_type not in ALLOWED_IMAGE_TYPES:
-                    raise InspectionError("Nicht unterstütztes Bildformat.")
-                declared_size = response.headers.get("content-length")
-                if declared_size:
-                    try:
-                        parsed_size = int(declared_size)
-                    except ValueError as exc:
-                        raise InspectionError("Ungültige Bildgrößenangabe.") from exc
-                    if parsed_size < 0 or parsed_size > MAX_IMAGE_BYTES:
-                        raise InspectionError("Bild überschreitet das Größenlimit.")
-                chunks: list[bytes] = []
-                total = 0
-                async for chunk in response.aiter_bytes():
-                    total += len(chunk)
-                    if total > MAX_IMAGE_BYTES:
-                        raise InspectionError("Bild überschreitet das Größenlimit.")
-                    chunks.append(chunk)
+            async with httpx.AsyncClient(
+                transport=transport,
+                timeout=httpx.Timeout(10.0),
+                follow_redirects=False,
+                trust_env=False,
+            ) as image_client:
+                async with image_client.stream("GET", image_url) as response:
+                    if response.status_code != 200:
+                        raise InspectionError("Bildquelle lieferte keinen erfolgreichen Status.")
+                    content_type = response.headers.get("content-type", "").split(";")[0].lower()
+                    if content_type not in ALLOWED_IMAGE_TYPES:
+                        raise InspectionError("Nicht unterstütztes Bildformat.")
+                    declared_size = response.headers.get("content-length")
+                    if declared_size:
+                        try:
+                            parsed_size = int(declared_size)
+                        except ValueError as exc:
+                            raise InspectionError("Ungültige Bildgrößenangabe.") from exc
+                        if parsed_size < 0 or parsed_size > MAX_IMAGE_BYTES:
+                            raise InspectionError("Bild überschreitet das Größenlimit.")
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > MAX_IMAGE_BYTES:
+                            raise InspectionError("Bild überschreitet das Größenlimit.")
+                        chunks.append(chunk)
         except httpx.HTTPError as exc:
             raise InspectionError("Bild konnte nicht sicher geladen werden.") from exc
 
