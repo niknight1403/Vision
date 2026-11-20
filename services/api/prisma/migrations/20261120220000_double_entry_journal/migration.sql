@@ -35,3 +35,19 @@ ALTER TABLE "JournalTransaction"
 ALTER TABLE "JournalEntry"
   ADD CONSTRAINT "JournalEntry_transactionId_fkey"
   FOREIGN KEY ("transactionId") REFERENCES "JournalTransaction"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- Posted journal history is append-only: corrections must use compensating entries.
+CREATE FUNCTION "reject_journal_mutation"() RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION 'journal records are immutable; post a compensating transaction'
+    USING ERRCODE = '55000';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "JournalTransaction_immutable"
+  BEFORE UPDATE OR DELETE ON "JournalTransaction"
+  FOR EACH ROW EXECUTE FUNCTION "reject_journal_mutation"();
+
+CREATE TRIGGER "JournalEntry_immutable"
+  BEFORE UPDATE OR DELETE ON "JournalEntry"
+  FOR EACH ROW EXECUTE FUNCTION "reject_journal_mutation"();
