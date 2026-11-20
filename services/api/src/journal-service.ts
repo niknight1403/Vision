@@ -62,6 +62,54 @@ function knownRequestCode(error: unknown): string | null {
   return error instanceof Prisma.PrismaClientKnownRequestError ? error.code : null;
 }
 
+async function postNormalizedJournalTransaction(
+  tx: Prisma.TransactionClient,
+  normalized: ReturnType<typeof normalize>,
+) {
+  const findExisting = () => tx.journalTransaction.findUnique({
+    where: { tenantId_referenceId: { tenantId: normalized.tenantId, referenceId: normalized.referenceId } },
+    include: { entries: true },
+  });
+  const existing = await findExisting();
+  if (existing) {
+    if (existing.payloadHash !== normalized.payloadHash) throw new Error("JOURNAL_IDEMPOTENCY_CONFLICT");
+    return existing;
+  }
+
+  const created = await tx.journalTransaction.create({
+    data: {
+      tenantId: normalized.tenantId,
+      referenceId: normalized.referenceId,
+      currency: normalized.currency,
+      description: normalized.description,
+      payloadHash: normalized.payloadHash,
+      entries: { create: normalized.entries },
+    },
+    select: { id: true },
+  });
+  // The database permits exactly this one-way transition. A deferred
+  // constraint trigger verifies the final entry set at transaction commit.
+  await tx.journalTransaction.update({
+    where: { id: created.id },
+    data: { postedAt: new Date() },
+  });
+  const posted = await findExisting();
+  if (!posted) throw new Error("JOURNAL_POSTING_NOT_FOUND_AFTER_FINALIZATION");
+  return posted;
+}
+
+/**
+ * Posts within a caller-owned transaction. The caller is responsible for
+ * SERIALIZABLE isolation and retrying the entire outer transaction on P2034.
+ * This is the required primitive for atomic wallet + journal + outbox writes.
+ */
+export async function postJournalTransactionInTransaction(
+  tx: Prisma.TransactionClient,
+  input: PostJournalInput,
+) {
+  return postNormalizedJournalTransaction(tx, normalize(input));
+}
+
 export async function postJournalTransaction(prisma: PrismaClient, input: PostJournalInput) {
   const normalized = normalize(input);
   const findExisting = (db: Db) => db.journalTransaction.findUnique({
@@ -70,33 +118,10 @@ export async function postJournalTransaction(prisma: PrismaClient, input: PostJo
   });
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      return await prisma.$transaction(async (tx) => {
-        const existing = await findExisting(tx);
-        if (existing) {
-          if (existing.payloadHash !== normalized.payloadHash) throw new Error("JOURNAL_IDEMPOTENCY_CONFLICT");
-          return existing;
-        }
-        const created = await tx.journalTransaction.create({
-          data: {
-            tenantId: normalized.tenantId,
-            referenceId: normalized.referenceId,
-            currency: normalized.currency,
-            description: normalized.description,
-            payloadHash: normalized.payloadHash,
-            entries: { create: normalized.entries },
-          },
-          select: { id: true },
-        });
-        // The database permits exactly this one-way transition. A deferred
-        // constraint trigger verifies the final entry set at transaction commit.
-        await tx.journalTransaction.update({
-          where: { id: created.id },
-          data: { postedAt: new Date() },
-        });
-        const posted = await findExisting(tx);
-        if (!posted) throw new Error("JOURNAL_POSTING_NOT_FOUND_AFTER_FINALIZATION");
-        return posted;
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      return await prisma.$transaction(
+        (tx) => postNormalizedJournalTransaction(tx, normalized),
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
     } catch (error) {
       const code = knownRequestCode(error);
       if (code !== "P2002" && code !== "P2034") throw error;
