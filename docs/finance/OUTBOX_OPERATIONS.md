@@ -13,6 +13,12 @@ The outbox provides at-least-once delivery, not exactly-once delivery. A handler
 
 The worker uses bounded exponential backoff (default 5 seconds, capped at one hour) and a configurable attempt limit (default 8). Lease loss is surfaced as `OUTBOX_LEASE_LOST`; a stale worker must not overwrite the current owner's state.
 
+## Consumer schema compatibility
+
+The API now provides an opt-in `OutboxConsumerRegistry` that dispatches only an exact registered pair of event type and schema version. It deliberately has no fallback to the latest or nearest version: an unknown event or version fails before the consumer handler runs, so incompatible payloads cannot silently reach a side effect. Register each supported version explicitly and keep old handlers registered while old events may still be pending or replayed.
+
+This registry is a dispatch guard, not a complete inbox/idempotency implementation. It does not persist consumer receipts and cannot make external side effects exactly-once. Consumers must still use the immutable event ID as a durable idempotency key at the downstream boundary. A transactional inbox table and end-to-end duplicate-delivery integration test remain required before enabling financial consumers.
+
 ## Required operational signals
 
 Export counters and gauges from the worker/DB observer (do not log payloads):
