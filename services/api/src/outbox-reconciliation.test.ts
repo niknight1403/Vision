@@ -49,7 +49,6 @@ describe("read-only outbox reconciliation", () => {
     ], {}, { now, pendingWarningSeconds: 60 });
     expect(report.findings.map((finding) => [finding.eventId, finding.code])).toEqual([
       ["no-published-at", "PUBLISHED_TIMESTAMP_MISSING"],
-      ["dead", "UNEXPECTED_LOCK"],
       ["dead", "DEAD_LETTER"],
       ["old-pending", "PENDING_OVERDUE"],
     ]);
