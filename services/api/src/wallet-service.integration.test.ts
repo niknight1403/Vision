@@ -1,6 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { PrismaClient } from "@prisma/client";
-import { releaseFunds, reserveFunds } from "./wallet-service.js";
+import { Prisma, PrismaClient } from "@prisma/client";
+import { postJournalTransactionInTransaction } from "./journal-service.js";
+import { enqueueOutboxEvent } from "./outbox-service.js";
+import { releaseFunds, releaseFundsInTransaction, reserveFunds, reserveFundsInTransaction } from "./wallet-service.js";
 
 const databaseEnabled = Boolean(process.env.DATABASE_URL);
 const suite = describe.skipIf(!databaseEnabled);
@@ -76,6 +78,84 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     })).toBe(1);
     const account = await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } });
     expect(account.reservedCents).toBe(1_000n);
+  });
+
+  it("composes wallet, journal, and outbox writes in one caller-owned transaction", async () => {
+    const referenceId = "wallet-journal-atomic-commit";
+    const reserveInput = {
+      accountId, ...walletScope(), amountCents: 1_000n,
+      referenceId, correlationId: referenceId, description: "transaction composition test",
+    };
+
+    await expect(prisma.$transaction(async (tx) => {
+      await reserveFundsInTransaction(tx, {
+        ...reserveInput, referenceId: "wallet-journal-atomic-rollback",
+      });
+      const journal = await postJournalTransactionInTransaction(tx, {
+        tenantId, referenceId: "wallet-journal-atomic-rollback", currency: "EUR",
+        description: "technical transaction composition test only",
+        entries: [
+          { accountCode: "TEST-COMPOSITION-DEBIT", debitCents: 1_000n },
+          { accountCode: "TEST-COMPOSITION-CREDIT", creditCents: 1_000n },
+        ],
+      });
+      await enqueueOutboxEvent(tx, {
+        eventType: "test.wallet-journal.composed",
+        aggregateId: accountId,
+        correlationId: "wallet-journal-atomic-rollback",
+        payload: { journalTransactionId: journal.id },
+      });
+      throw new Error("FORCE_COMPOSED_TRANSACTION_ROLLBACK");
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })).rejects.toThrow("FORCE_COMPOSED_TRANSACTION_ROLLBACK");
+
+    expect((await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } })).reservedCents).toBe(0n);
+    expect(await prisma.walletLedger.count({ where: { referenceId: "wallet-journal-atomic-rollback" } })).toBe(0);
+    expect(await prisma.journalTransaction.count({ where: { tenantId, referenceId: "wallet-journal-atomic-rollback" } })).toBe(0);
+    expect(await prisma.outboxEvent.count({ where: { correlationId: "wallet-journal-atomic-rollback" } })).toBe(0);
+
+    await prisma.$transaction(async (tx) => {
+      await reserveFundsInTransaction(tx, reserveInput);
+      const journal = await postJournalTransactionInTransaction(tx, {
+        tenantId, referenceId: "wallet-journal-atomic-commit", currency: "EUR",
+        description: "technical transaction composition test only",
+        entries: [
+          { accountCode: "TEST-COMPOSITION-DEBIT", debitCents: 1_000n },
+          { accountCode: "TEST-COMPOSITION-CREDIT", creditCents: 1_000n },
+        ],
+      });
+      await enqueueOutboxEvent(tx, {
+        eventType: "test.wallet-journal.composed",
+        aggregateId: accountId,
+        correlationId: "wallet-journal-atomic-commit",
+        payload: { journalTransactionId: journal.id },
+      });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    expect((await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } })).reservedCents).toBe(1_000n);
+    expect(await prisma.walletLedger.count({ where: { referenceId } })).toBe(1);
+    expect(await prisma.journalTransaction.count({ where: { tenantId, referenceId } })).toBe(1);
+    expect(await prisma.outboxEvent.count({ where: { correlationId: referenceId } })).toBe(2);
+  });
+
+  it("supports reservation release inside a caller-owned transaction", async () => {
+    await reserveFunds(prisma, {
+      accountId, ...walletScope(), amountCents: 1_200n,
+      referenceId: "wallet-release-composition-source", description: "release composition source",
+    });
+    const before = await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } });
+    await prisma.$transaction(async (tx) => {
+      await releaseFundsInTransaction(tx, {
+        accountId, ...walletScope(), amountCents: 700n,
+        referenceId: "wallet-release-composition-inner",
+        reservationReferenceId: "wallet-release-composition-source",
+        description: "caller-owned partial release",
+      });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    const after = await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } });
+    expect(before.reservedCents - after.reservedCents).toBe(700n);
+    expect(await prisma.outboxEvent.count({
+      where: { aggregateId: accountId, eventType: "wallet.reservation.released", correlationId: "wallet-release-composition-inner" },
+    })).toBe(1);
   });
 
   it("binds an idempotent release to its source reservation", async () => {
