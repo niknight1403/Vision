@@ -21,6 +21,7 @@ suite("double-entry journal (PostgreSQL)", () => {
   });
 
   afterAll(async () => {
+    await prisma.$executeRaw\`SELECT set_config('app.journal_maintenance', 'on', false)\`;
     if (transactionIds.length) {
       await prisma.journalEntry.deleteMany({ where: { transactionId: { in: transactionIds } } });
       await prisma.journalTransaction.deleteMany({ where: { id: { in: transactionIds } } });
@@ -70,6 +71,20 @@ suite("double-entry journal (PostgreSQL)", () => {
       ],
     })).rejects.toThrow("JOURNAL_IDEMPOTENCY_CONFLICT");
     expect(await prisma.journalTransaction.count({ where: { tenantId, referenceId: input.referenceId } })).toBe(1);
+  });
+
+  it("prevents updates and deletes to posted journal records", async () => {
+    const transaction = await postJournalTransaction(prisma, posting("journal-immutable"));
+    transactionIds.push(transaction.id);
+    await expect(prisma.journalEntry.updateMany({
+      where: { transactionId: transaction.id }, data: { description: "tampered" } as never,
+    })).rejects.toThrow();
+    await expect(prisma.journalEntry.deleteMany({
+      where: { transactionId: transaction.id },
+    })).rejects.toThrow();
+    await expect(prisma.journalTransaction.update({
+      where: { id: transaction.id }, data: { description: "tampered" },
+    })).rejects.toThrow();
   });
 
   it("calculates account balances and isolates them by tenant", async () => {
