@@ -50,4 +50,35 @@ describe("policy-driven wallet/journal evidence reconciliation", () => {
       "JOURNAL_NOT_POSTED", "CURRENCY_MISMATCH", "JOURNAL_UNBALANCED", "JOURNAL_LINES_MISMATCH",
     ]);
   });
+
+  it("rejects duplicate tenant-scoped journal references as ambiguous", () => {
+    const result = reconcileWalletJournalEvidence([wallet], [journal, { ...journal, id: "journal-duplicate" }], policy);
+    expect(result.findings.map((finding) => finding.code)).toEqual(["AMBIGUOUS_JOURNAL_REFERENCE"]);
+  });
+
+  it("rejects malformed wallet evidence and invalid policy lines", () => {
+    const invalidWallet = reconcileWalletJournalEvidence([{ ...wallet, amountCents: 0n }], [journal], policy);
+    expect(invalidWallet.findings.map((finding) => finding.code)).toEqual(["INVALID_WALLET_EVIDENCE"]);
+
+    const invalidPolicy = {
+      "wallet-ledger-1": {
+        journalReferenceId: "journal-ref-1",
+        expectedLines: [{ accountCode: "BAD", debitCents: -1n, creditCents: 0n }],
+      },
+    };
+    const invalidMapping = reconcileWalletJournalEvidence([wallet], [journal], invalidPolicy);
+    expect(invalidMapping.findings.map((finding) => finding.code)).toEqual(["INVALID_POLICY"]);
+  });
+
+  it("rejects journal lines with negative, empty, or dual-sided amounts", () => {
+    const result = reconcileWalletJournalEvidence([wallet], [{
+      ...journal,
+      entries: [
+        { accountCode: "BAD", debitCents: 1n, creditCents: 1n },
+        { accountCode: "", debitCents: -1n, creditCents: 0n },
+      ],
+    }], policy);
+    expect(result.findings.map((finding) => finding.code)).toContain("JOURNAL_LINES_INVALID");
+    expect(result.findings.map((finding) => finding.code)).toContain("JOURNAL_UNBALANCED");
+  });
 });
