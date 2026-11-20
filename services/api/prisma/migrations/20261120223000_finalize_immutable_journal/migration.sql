@@ -24,7 +24,7 @@ BEGIN
 
   IF TG_TABLE_NAME = 'JournalEntry' AND TG_OP = 'INSERT' THEN
     SELECT "postedAt" INTO parent_posted_at
-      FROM "JournalTransaction" WHERE "id" = NEW."transactionId";
+      FROM "JournalTransaction" WHERE "id" = NEW."transactionId" FOR UPDATE;
     IF NOT FOUND OR parent_posted_at IS NOT NULL THEN
       RAISE EXCEPTION 'cannot append entries to a finalized journal transaction'
         USING ERRCODE = '55000';
@@ -65,11 +65,16 @@ DECLARE
 BEGIN
   SELECT "postedAt" INTO current_posted_at
     FROM "JournalTransaction" WHERE "id" = NEW."id";
+  IF NOT FOUND OR current_posted_at IS NULL THEN
+    RAISE EXCEPTION 'journal transaction must be finalized'
+      USING ERRCODE = '23514';
+  END IF;
+
   SELECT COUNT(*), COALESCE(SUM("debitCents"), 0), COALESCE(SUM("creditCents"), 0)
     INTO entry_count, debit_total, credit_total
     FROM "JournalEntry" WHERE "transactionId" = NEW."id";
 
-  IF current_posted_at IS NULL OR entry_count < 2 OR debit_total <= 0 OR debit_total <> credit_total THEN
+  IF entry_count < 2 OR debit_total <= 0 OR debit_total <> credit_total THEN
     RAISE EXCEPTION 'journal transaction must be finalized with at least two balanced entries'
       USING ERRCODE = '23514';
   END IF;
