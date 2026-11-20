@@ -1,5 +1,6 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { enqueueOutboxEvent } from "./outbox-service.js";
+import { runSerializableTransaction } from "./transaction-retry.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -110,10 +111,7 @@ export async function reserveFunds(
   prisma: PrismaClient,
   input: ReserveFundsInput,
 ): Promise<WalletSnapshot> {
-  return prisma.$transaction(
-    (tx) => reserveFundsInTransaction(tx, input),
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-  );
+  return runSerializableTransaction(prisma, (tx) => reserveFundsInTransaction(tx, input));
 }
 
 export type ReleaseFundsInput = {
@@ -215,8 +213,5 @@ export async function releaseFunds(
   prisma: PrismaClient,
   input: ReleaseFundsInput,
 ): Promise<WalletSnapshot> {
-  return prisma.$transaction(
-    (tx) => releaseFundsInTransaction(tx, input),
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-  );
+  return runSerializableTransaction(prisma, (tx) => releaseFundsInTransaction(tx, input));
 }
