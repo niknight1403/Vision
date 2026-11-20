@@ -1,9 +1,13 @@
 import socket
 
 import httpcore
+import httpx
 import pytest
 
-from vision_worker.pinned_http_transport import _PinnedAsyncNetworkBackend
+from vision_worker.pinned_http_transport import (
+    PinnedAsyncHTTPTransport,
+    _PinnedAsyncNetworkBackend,
+)
 from vision_worker.vision_identifier import (
     InspectionError,
     VisualInspection,
@@ -146,3 +150,38 @@ async def test_pinned_backend_refuses_different_host_and_port():
         await backend.connect_tcp("169.254.169.254", 443)
     with pytest.raises(httpcore.ConnectError):
         await backend.connect_tcp("images.example.org", 80)
+
+
+@pytest.mark.asyncio
+async def test_transport_keeps_original_host_header_and_tls_origin():
+    captured = {}
+
+    class EmptyCoreStream(httpcore.AsyncByteStream):
+        async def __aiter__(self):
+            if False:
+                yield b""
+
+        async def aclose(self):
+            return None
+
+    transport = PinnedAsyncHTTPTransport("images.example.org", ["93.184.216.34"])
+
+    async def fake_send(core_request):
+        captured["host"] = core_request.url.host
+        captured["headers"] = dict(core_request.headers)
+        return httpcore.Response(
+            status=200,
+            headers=[(b"content-type", b"image/png")],
+            stream=EmptyCoreStream(),
+        )
+
+    transport._pool.handle_async_request = fake_send
+    request = httpx.Request("GET", "https://images.example.org/item.png")
+    response = await transport.handle_async_request(request)
+
+    assert captured["host"] == b"images.example.org"
+    assert captured["headers"][b"host"] == b"images.example.org"
+    assert response.status_code == 200
+
+    await response.aclose()
+    await transport.aclose()
