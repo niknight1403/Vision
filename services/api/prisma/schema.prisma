@@ -242,6 +242,14 @@ model DealCandidate {
 }
 
 
+model LegacyDealReviewState {
+  candidateId  String           @id
+  reviewStatus DealReviewStatus
+  reviewedBy   String?
+  reviewedAt   DateTime?
+  archivedAt   DateTime         @default(now())
+}
+
 model DealReview {
   id             String              @id @default(cuid())
   tenantId       String
