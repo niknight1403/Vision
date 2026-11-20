@@ -69,6 +69,18 @@ suite("double-entry journal (PostgreSQL)", () => {
     expect(await prisma.journalTransaction.count({ where: { tenantId, referenceId: input.referenceId } })).toBe(1);
   });
 
+  it("deduplicates concurrent identical postings under serializable isolation", async () => {
+    const input = posting("journal-concurrent-idempotent");
+    const [first, second] = await Promise.all([
+      postJournalTransaction(prisma, input),
+      postJournalTransaction(prisma, input),
+    ]);
+    expect(first.id).toBe(second.id);
+    expect(await prisma.journalTransaction.count({
+      where: { tenantId, referenceId: input.referenceId },
+    })).toBe(1);
+  });
+
   it("prevents updates and deletes to posted journal records", async () => {
     const transaction = await postJournalTransaction(prisma, posting("journal-immutable"));
     await expect(prisma.journalEntry.updateMany({
