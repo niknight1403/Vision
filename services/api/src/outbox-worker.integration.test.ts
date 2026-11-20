@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
-import { processOneOutboxMessage } from "./outbox-worker.js";
+import { processOneOutboxMessage, processOneOutboxMessageWithInbox } from "./outbox-worker.js";
 
 const databaseEnabled = Boolean(process.env.DATABASE_URL);
 const suite = describe.skipIf(!databaseEnabled);
@@ -11,9 +11,57 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
 
   afterAll(async () => {
     if (aggregateIds.length) {
+      const events = await prisma.outboxEvent.findMany({ where: { aggregateId: { in: aggregateIds } }, select: { id: true } });
+      if (events.length) await prisma.outboxConsumerReceipt.deleteMany({ where: { eventId: { in: events.map((event) => event.id) } } });
       await prisma.outboxEvent.deleteMany({ where: { aggregateId: { in: aggregateIds } } });
     }
     await prisma.$disconnect();
+  });
+
+  it("processes database effects through the inbox before acknowledging the outbox event", async () => {
+    const aggregateId = `outbox-inbox-success-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.inbox.worker", aggregateId, payload: { test: true },
+    } });
+    const result = await processOneOutboxMessageWithInbox(
+      prisma,
+      { workerId: "worker-inbox", eventTypes: ["test.inbox.worker"] },
+      "integration-projection",
+      async (tx, message) => {
+        await tx.idempotencyKey.create({ data: {
+          scope: `worker-inbox-${message.id}`, key: "projection",
+          requestHash: "d".repeat(64), expiresAt: new Date(Date.now() + 60_000),
+        } });
+      },
+    );
+    expect(result).toBe("PUBLISHED");
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("PUBLISHED");
+    expect(await prisma.outboxConsumerReceipt.count({
+      where: { eventId: event.id, consumerName: "integration-projection" },
+    })).toBe(1);
+    expect(await prisma.idempotencyKey.count({ where: { scope: `worker-inbox-${event.id}` } })).toBe(1);
+    await prisma.idempotencyKey.deleteMany({ where: { scope: `worker-inbox-${event.id}` } });
+  });
+
+  it("does not acknowledge or retain a receipt when an inbox consumer transaction fails", async () => {
+    const aggregateId = `outbox-inbox-failure-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.inbox.worker.failure", aggregateId, payload: { test: true },
+    } });
+    const result = await processOneOutboxMessageWithInbox(
+      prisma,
+      { workerId: "worker-inbox-failure", maxAttempts: 2, baseRetrySeconds: 5, eventTypes: ["test.inbox.worker.failure"] },
+      "integration-projection-failure",
+      async () => { throw new Error("transactional consumer failure"); },
+    );
+    expect(result).toBe("RETRY_SCHEDULED");
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("PENDING");
+    expect(current.lockedBy).toBeNull();
+    expect(await prisma.outboxConsumerReceipt.count({ where: { eventId: event.id } })).toBe(0);
   });
 
   it("does not overwrite a message reclaimed by another worker", async () => {
