@@ -6,6 +6,8 @@ const databaseEnabled = Boolean(process.env.DATABASE_URL);
 const suite = describe.skipIf(!databaseEnabled);
 const prisma = new PrismaClient();
 let accountId: string;
+let ownerId = "";
+let tenantId = "";
 let ownerSequence = 0;
 
 suite("wallet reservation release invariants (PostgreSQL)", () => {
@@ -15,8 +17,15 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
 
   beforeEach(async () => {
     ownerSequence += 1;
+    const user = await prisma.user.create({ data: {
+      email: `wallet-release-${process.pid}-${ownerSequence}@example.test`, passwordHash: "integration-test-hash",
+    } });
+    ownerId = user.id;
+    const tenant = await prisma.tenant.create({ data: { name: "Wallet release test" } });
+    tenantId = tenant.id;
+    await prisma.tenantMembership.create({ data: { tenantId, userId: ownerId, role: "OWNER" } });
     const account = await prisma.walletAccount.create({
-      data: { ownerId: `wallet-release-test-${process.pid}-${ownerSequence}`, currency: "EUR", balanceCents: 20_000n },
+      data: { ownerId, tenantId, currency: "EUR", balanceCents: 20_000n },
     });
     accountId = account.id;
   });
@@ -25,15 +34,19 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     if (accountId) {
       await prisma.walletLedger.deleteMany({ where: { accountId } });
       await prisma.walletAccount.deleteMany({ where: { id: accountId } });
+      await prisma.tenant.delete({ where: { id: tenantId } });
+      await prisma.user.delete({ where: { id: ownerId } });
     }
   });
 
+  const walletScope = () => ({ ownerId, tenantId });
+
   it("binds an idempotent release to its source reservation", async () => {
     await reserveFunds(prisma, {
-      accountId, amountCents: 4_000n, referenceId: "reservation-idempotent", description: "test reservation",
+      accountId, ...walletScope(), amountCents: 4_000n, referenceId: "reservation-idempotent", description: "test reservation",
     });
     const input = {
-      accountId, amountCents: 4_000n, referenceId: "release-idempotent",
+      accountId, ...walletScope(), amountCents: 4_000n, referenceId: "release-idempotent",
       reservationReferenceId: "reservation-idempotent", description: "test release",
     };
     const first = await releaseFunds(prisma, input);
