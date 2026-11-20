@@ -202,6 +202,30 @@ suite("authenticated deal review routes (RBAC)", () => {
     expect(listed?.expectedProfitCents).toBe("2500");
   });
 
+  it("rejects a tenant selector that belongs to another user", async () => {
+    const { accessToken } = await login(viewerEmail);
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/deals",
+      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(adminEmail) },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "TENANT_ACCESS_DENIED" });
+  });
+
+  it("lists only the authenticated user's tenant memberships", async () => {
+    const { accessToken } = await login(viewerEmail);
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/tenants",
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().tenants).toEqual([
+      { id: tenantByEmail.get(viewerEmail), name: "Test workspace", role: "VIEWER" },
+    ]);
+  });
+
   it("forbids a viewer from reviewing a deal", async () => {
     const deal = await createDeal();
     const { accessToken } = await login(viewerEmail);
