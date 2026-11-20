@@ -99,9 +99,9 @@ export type ReleaseFundsInput = {
   reservationReferenceId: string;
   correlationId?: string;
   description: string;
-};
+}
 
-/** Releases a prior reservation; the source reservation must be identified explicitly. unique referenceId makes retries idempotent. */
+/** Releases part or all of a prior reservation; cumulative releases may never exceed the source amount. */
 export async function releaseFunds(
   prisma: PrismaClient,
   input: ReleaseFundsInput,
@@ -132,8 +132,7 @@ export async function releaseFunds(
       where: { referenceId: input.reservationReferenceId },
     });
     if (!originalReservation || originalReservation.accountId !== input.accountId ||
-        originalReservation.entryType !== "RESERVATION" ||
-        originalReservation.amountCents !== input.amountCents) {
+        originalReservation.entryType !== "RESERVATION") {
       throw new Error("ORIGINAL_RESERVATION_NOT_FOUND_OR_MISMATCHED");
     }
     const priorReleases = await tx.walletLedger.aggregate({
