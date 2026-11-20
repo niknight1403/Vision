@@ -172,7 +172,7 @@ async def test_transport_keeps_original_host_header_and_tls_origin():
     response = await transport.handle_async_request(request)
 
     assert captured["host"] == b"images.example.org"
-    assert captured["headers"][b"host"] == b"images.example.org"
+    assert {key.lower(): value for key, value in captured["headers"].items()}[b"host"] == b"images.example.org"
     assert response.status_code == 200
 
     await response.aclose()
