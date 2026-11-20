@@ -121,3 +121,32 @@ No implementation should guess these answers.
 ## 9. Release gate
 
 This proposal does not authorize production migrations, deployment, payment-provider configuration, funding, payout, or live trading. PR #32 remains Draft and depends on PR #31. The policy must be reviewed and approved before implementation begins.
+
+## 10. Outbox operations — current implementation boundary
+
+The API outbox worker currently provides:
+
+- Atomic event creation through the caller-owned transaction helper.
+- Lease-based claiming with `FOR UPDATE SKIP LOCKED`.
+- Lease-owner predicates on publish/failure updates; a stale worker receives `OUTBOX_LEASE_LOST` and cannot overwrite a reclaimed message.
+- Bounded exponential retry delay (maximum one hour) and configurable attempt limit.
+- `DEAD_LETTER` status after the configured attempt limit.
+- Optional event-type allowlist for worker isolation.
+- At-least-once delivery semantics. Every downstream handler must be idempotent.
+
+Operational limitations are intentional and must remain visible:
+
+- There is no authenticated dead-letter inspection/replay API, operator UI, alerting integration, or durable consumer inbox in this change.
+- Do not replay by editing database rows manually. A replay workflow must require tenant-aware authorization, an auditable operator identity/reason, a fresh lease, preserved original event identity, and consumer deduplication.
+- A dead-letter event must remain retained for investigation; no automatic deletion or silent reset to PENDING.
+- A handler side effect may succeed before the worker loses its lease or crashes. Therefore transport delivery cannot promise exactly-once effects; only idempotent consumers can prevent duplicate business effects.
+- Lease expiry is a recovery mechanism, not proof that the previous handler stopped. Long-running handlers need bounded execution or lease renewal before they can safely run in production.
+
+Required follow-up before production dispatch:
+1. Add authenticated read-only queue health/dead-letter visibility with tenant-safe redaction.
+2. Add explicit, audited replay command with approval and idempotency checks; do not expose a generic status mutation.
+3. Add metrics for pending age/count, processing leases, retry rate, dead-letter count, publish latency, and lease loss.
+4. Add consumer inbox/deduplication keyed by stable provider/event identity for any handler with external side effects.
+5. Add tests for expired-lease reclaim, replay authorization, duplicate consumer delivery, and alert thresholds.
+
+Until those controls exist, this worker is an internal integration primitive, not an approved production payment or settlement dispatcher.
