@@ -7,7 +7,6 @@ const suite = describe.skipIf(!databaseEnabled);
 const prisma = new PrismaClient();
 let tenantId = "";
 let otherTenantId = "";
-const transactionIds: string[] = [];
 
 suite("double-entry journal (PostgreSQL)", () => {
   beforeAll(async () => {
@@ -53,7 +52,6 @@ suite("double-entry journal (PostgreSQL)", () => {
   it("posts atomically and returns the same transaction for an identical retry", async () => {
     const input = posting("journal-idempotent");
     const first = await postJournalTransaction(prisma, input);
-    transactionIds.push(first.id);
     const retry = await postJournalTransaction(prisma, input);
     expect(retry.id).toBe(first.id);
     expect(first.entries).toHaveLength(2);
@@ -70,7 +68,6 @@ suite("double-entry journal (PostgreSQL)", () => {
 
   it("prevents updates and deletes to posted journal records", async () => {
     const transaction = await postJournalTransaction(prisma, posting("journal-immutable"));
-    transactionIds.push(transaction.id);
     await expect(prisma.journalEntry.updateMany({
       where: { transactionId: transaction.id }, data: { debitCents: 1n },
     })).rejects.toThrow();
