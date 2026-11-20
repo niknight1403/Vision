@@ -115,7 +115,13 @@ class PinnedAsyncHTTPTransport(httpx.AsyncBaseTransport):
         )
         try:
             core_response = await self._pool.handle_async_request(core_request)
-        except (\n            httpcore.NetworkError,\n            httpcore.ProtocolError,\n            httpcore.TimeoutException,\n            httpcore.ProxyError,\n            httpcore.LocalProtocolError,\n        ) as exc:
+        except (
+            httpcore.NetworkError,
+            httpcore.ProtocolError,
+            httpcore.TimeoutException,
+            httpcore.ProxyError,
+            httpcore.LocalProtocolError,
+        ) as exc:
             raise httpx.TransportError("Pinned image connection failed", request=request) from exc
 
         return httpx.Response(
