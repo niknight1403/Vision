@@ -58,8 +58,8 @@ function normalize(input: PostJournalInput) {
   return { ...canonical, entries, payloadHash };
 }
 
-function isUniqueConflict(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+function knownRequestCode(error: unknown): string | null {
+  return error instanceof Prisma.PrismaClientKnownRequestError ? error.code : null;
 }
 
 export async function postJournalTransaction(prisma: PrismaClient, input: PostJournalInput) {
@@ -68,33 +68,45 @@ export async function postJournalTransaction(prisma: PrismaClient, input: PostJo
     where: { tenantId_referenceId: { tenantId: normalized.tenantId, referenceId: normalized.referenceId } },
     include: { entries: true },
   });
-  try {
-    return await prisma.$transaction(async (tx) => {
-      const existing = await findExisting(tx);
-      if (existing) {
-        if (existing.payloadHash !== normalized.payloadHash) throw new Error("JOURNAL_IDEMPOTENCY_CONFLICT");
-        return existing;
-      }
-      return tx.journalTransaction.create({
-        data: {
-          tenantId: normalized.tenantId,
-          referenceId: normalized.referenceId,
-          currency: normalized.currency,
-          description: normalized.description,
-          payloadHash: normalized.payloadHash,
-          entries: { create: normalized.entries },
-        },
-        include: { entries: true },
-      });
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-  } catch (error) {
-    if (isUniqueConflict(error)) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const existing = await findExisting(tx);
+        if (existing) {
+          if (existing.payloadHash !== normalized.payloadHash) throw new Error("JOURNAL_IDEMPOTENCY_CONFLICT");
+          return existing;
+        }
+        return tx.journalTransaction.create({
+          data: {
+            tenantId: normalized.tenantId,
+            referenceId: normalized.referenceId,
+            currency: normalized.currency,
+            description: normalized.description,
+            payloadHash: normalized.payloadHash,
+            entries: { create: normalized.entries },
+          },
+          include: { entries: true },
+        });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (error) {
+      const code = knownRequestCode(error);
+      if (code !== "P2002" && code !== "P2034") throw error;
+
+      // A concurrent writer may have committed the same idempotency key while
+      // this serializable transaction was being retried/aborted.
       const concurrent = await findExisting(prisma);
-      if (concurrent?.payloadHash === normalized.payloadHash) return concurrent;
-      if (concurrent) throw new Error("JOURNAL_IDEMPOTENCY_CONFLICT");
+      if (concurrent) {
+        if (concurrent.payloadHash !== normalized.payloadHash) {
+          throw new Error("JOURNAL_IDEMPOTENCY_CONFLICT");
+        }
+        return concurrent;
+      }
+
+      // P2002 without our tenant/reference row is a different unique violation.
+      if (code === "P2002" || attempt === 2) throw error;
     }
-    throw error;
   }
+  throw new Error("JOURNAL_SERIALIZATION_RETRY_EXHAUSTED");
 }
 
 export async function getJournalAccountBalance(
