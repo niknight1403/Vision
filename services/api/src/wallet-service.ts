@@ -41,15 +41,15 @@ async function snapshot(db: Db, input: Pick<ReserveFundsInput, "accountId" | "ow
  * Reserves available funds atomically. Call only from an authenticated,
  * server-authorized workflow. The caller must use a stable referenceId for retries.
  */
-export async function reserveFunds(
-  prisma: PrismaClient,
+export async function reserveFundsInTransaction(
+  tx: Prisma.TransactionClient,
   input: ReserveFundsInput,
 ): Promise<WalletSnapshot> {
   assertPositiveAmount(input.amountCents);
   if (!input.referenceId.trim()) throw new Error("REFERENCE_ID_REQUIRED");
   if (!input.ownerId.trim() || !input.tenantId.trim()) throw new Error("WALLET_OWNER_REQUIRED");
 
-  return prisma.$transaction(async (tx) => {
+  return (async () => {
     // Lock the account row so concurrent reservations cannot spend the same balance.
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id FROM "WalletAccount" WHERE id = ${input.accountId} AND "ownerId" = ${input.ownerId} AND "tenantId" = ${input.tenantId} FOR UPDATE
@@ -103,7 +103,17 @@ export async function reserveFunds(
       },
     });
     return snapshot(tx, input);
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  })();
+}
+
+export async function reserveFunds(
+  prisma: PrismaClient,
+  input: ReserveFundsInput,
+): Promise<WalletSnapshot> {
+  return prisma.$transaction(
+    (tx) => reserveFundsInTransaction(tx, input),
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
 }
 
 export type ReleaseFundsInput = {
@@ -118,8 +128,8 @@ export type ReleaseFundsInput = {
 }
 
 /** Releases part or all of a prior reservation; cumulative releases may never exceed the source amount. */
-export async function releaseFunds(
-  prisma: PrismaClient,
+export async function releaseFundsInTransaction(
+  tx: Prisma.TransactionClient,
   input: ReleaseFundsInput,
 ): Promise<WalletSnapshot> {
   assertPositiveAmount(input.amountCents);
@@ -198,5 +208,15 @@ export async function releaseFunds(
       },
     });
     return snapshot(tx, input);
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  })();
+}
+
+export async function releaseFunds(
+  prisma: PrismaClient,
+  input: ReleaseFundsInput,
+): Promise<WalletSnapshot> {
+  return prisma.$transaction(
+    (tx) => releaseFundsInTransaction(tx, input),
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
 }
