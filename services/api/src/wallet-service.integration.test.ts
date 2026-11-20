@@ -32,6 +32,7 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
 
   afterEach(async () => {
     if (accountId) {
+      await prisma.outboxEvent.deleteMany({ where: { aggregateId: accountId } });
       await prisma.walletLedger.deleteMany({ where: { accountId } });
       await prisma.walletAccount.deleteMany({ where: { id: accountId } });
       await prisma.tenant.delete({ where: { id: tenantId } });
@@ -49,6 +50,32 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     const account = await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } });
     expect(account.reservedCents).toBe(0n);
     expect(await prisma.walletLedger.count({ where: { accountId } })).toBe(0);
+  });
+
+  it("writes reservation and release outbox events atomically and idempotently", async () => {
+    const reservation = {
+      accountId, ...walletScope(), amountCents: 2_000n,
+      referenceId: "reservation-outbox-atomic", correlationId: "wallet-outbox-test",
+      description: "outbox reservation",
+    };
+    await reserveFunds(prisma, reservation);
+    await reserveFunds(prisma, reservation);
+    expect(await prisma.outboxEvent.count({
+      where: { aggregateId: accountId, eventType: "wallet.reservation.created" },
+    })).toBe(1);
+
+    const release = {
+      accountId, ...walletScope(), amountCents: 1_000n,
+      referenceId: "release-outbox-atomic", reservationReferenceId: reservation.referenceId,
+      correlationId: "wallet-outbox-test", description: "outbox partial release",
+    };
+    await releaseFunds(prisma, release);
+    await releaseFunds(prisma, release);
+    expect(await prisma.outboxEvent.count({
+      where: { aggregateId: accountId, eventType: "wallet.reservation.released" },
+    })).toBe(1);
+    const account = await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } });
+    expect(account.reservedCents).toBe(1_000n);
   });
 
   it("binds an idempotent release to its source reservation", async () => {
