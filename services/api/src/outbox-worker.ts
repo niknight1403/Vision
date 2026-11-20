@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 
 export type OutboxMessage = {
   id: string; eventType: string; aggregateId: string; correlationId: string | null;
@@ -36,10 +36,31 @@ export async function claimOutboxMessage(prisma: PrismaClient, options: WorkerOp
   const leaseSeconds = options.leaseSeconds ?? 60;
   const workerId = validateWorkerOptions(options);
   if (!Number.isInteger(leaseSeconds) || leaseSeconds < 5 || leaseSeconds > 3600) throw new Error("INVALID_LEASE_SECONDS");
-  const rows = await prisma.$queryRawUnsafe<OutboxMessage[]>(
-    'WITH candidate AS (SELECT id FROM "OutboxEvent" WHERE ((status = \'PENDING\' AND "availableAt" <= NOW()) OR (status = \'PROCESSING\' AND "leaseUntil" < NOW())) AND ($3::text[] IS NULL OR "eventType" = ANY($3::text[])) ORDER BY "availableAt", "createdAt" FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE "OutboxEvent" event SET status = \'PROCESSING\', attempts = event.attempts + 1, "lockedBy" = $1, "leaseUntil" = NOW() + ($2 * INTERVAL \'1 second\') FROM candidate WHERE event.id = candidate.id RETURNING event.id, event."eventType", event."aggregateId", event."correlationId", event."schemaVersion", event.payload, event.attempts',
-    workerId, leaseSeconds, options.eventTypes ?? null,
-  );
+  const eventTypeFilter = options.eventTypes?.length
+    ? Prisma.sql`AND "eventType" IN (${Prisma.join(options.eventTypes)})`
+    : Prisma.empty;
+  const rows = await prisma.$queryRaw<OutboxMessage[]>(Prisma.sql`
+    WITH candidate AS (
+      SELECT id FROM "OutboxEvent"
+      WHERE (
+        (status = 'PENDING' AND "availableAt" <= NOW())
+        OR (status = 'PROCESSING' AND "leaseUntil" < NOW())
+      )
+      ${eventTypeFilter}
+      ORDER BY "availableAt", "createdAt"
+      FOR UPDATE SKIP LOCKED
+      LIMIT 1
+    )
+    UPDATE "OutboxEvent" event
+    SET status = 'PROCESSING',
+        attempts = event.attempts + 1,
+        "lockedBy" = ${workerId},
+        "leaseUntil" = NOW() + (${leaseSeconds} * INTERVAL '1 second')
+    FROM candidate
+    WHERE event.id = candidate.id
+    RETURNING event.id, event."eventType", event."aggregateId", event."correlationId",
+              event."schemaVersion", event.payload, event.attempts
+  `);
   return rows[0] ?? null;
 }
 
