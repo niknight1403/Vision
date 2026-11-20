@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { postJournalTransaction } from "./journal-service.js";
 import { reconcileWalletJournal, walletJournalAccountCodes } from "./wallet-journal-reconciliation.js";
@@ -8,8 +8,10 @@ const suite = describe.skipIf(!databaseEnabled);
 const prisma = new PrismaClient();
 
 suite("wallet-to-journal reconciliation (PostgreSQL)", () => {
+  beforeAll(async () => { await prisma.$connect(); });
+  afterAll(async () => { await prisma.$disconnect(); });
+
   it("reconciles wallet counters, reservation ledger and journal subaccounts", async () => {
-    await prisma.$connect();
     const tenant = await prisma.tenant.create({ data: { name: "Wallet journal reconciliation test" } });
     const wallet = await prisma.walletAccount.create({
       data: { tenantId: tenant.id, ownerId: "wallet-journal-test-owner", currency: "EUR", balanceCents: 20_000n, reservedCents: 4_000n },
@@ -48,15 +50,12 @@ suite("wallet-to-journal reconciliation (PostgreSQL)", () => {
     expect(drift.balanced).toBe(false);
     expect(drift.differences.map((item) => item.field)).toContain("walletReservedVsReservationLedger");
     expect(drift.differences.map((item) => item.field)).toContain("journalReservedVsWalletReserved");
-    await prisma.$disconnect();
   });
 
   it("does not reveal a wallet through a mismatched tenant or owner", async () => {
-    await prisma.$connect();
     await expect(reconcileWalletJournal(prisma, {
       tenantId: "other-tenant", ownerId: "other-owner", accountId: "unknown-wallet",
     })).rejects.toThrow("WALLET_NOT_FOUND");
-    await prisma.$disconnect();
   });
 });
 
