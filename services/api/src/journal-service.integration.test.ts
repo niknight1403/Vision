@@ -91,7 +91,6 @@ suite("double-entry journal (PostgreSQL)", () => {
       ],
     };
     const transaction = await postJournalTransaction(prisma, input);
-    transactionIds.push(transaction.id);
     const [cash, sales, otherTenantCash] = await Promise.all([
       getJournalAccountBalance(prisma, { tenantId, accountCode: "BALANCE-CASH", currency: "EUR" }),
       getJournalAccountBalance(prisma, { tenantId, accountCode: "BALANCE-SALES", currency: "EUR" }),
@@ -105,7 +104,6 @@ suite("double-entry journal (PostgreSQL)", () => {
   it("reconciles every tenant transaction and reports a clean result", async () => {
     const input = posting("journal-reconcile");
     const transaction = await postJournalTransaction(prisma, input);
-    transactionIds.push(transaction.id);
     const result = await reconcileJournal(prisma, { tenantId });
     expect(result.balanced).toBe(true);
     expect(result.imbalances).toHaveLength(0);
