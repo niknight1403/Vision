@@ -41,6 +41,30 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   refreshSessions RefreshSession[]
+  tenantMemberships TenantMembership[]
+  dealReviewDecisions DealReviewDecision[]
+}
+
+model Tenant {
+  id        String             @id @default(cuid())
+  name      String
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  memberships TenantMembership[]
+  dealReviewDecisions DealReviewDecision[]
+}
+
+model TenantMembership {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  role      UserRole @default(VIEWER)
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId, createdAt])
 }
 
 model RefreshSession {
@@ -187,6 +211,7 @@ model DealCandidate {
   reviewedAt               DateTime?
   createdAt                DateTime         @default(now())
   updatedAt                DateTime         @updatedAt
+  reviewDecisions          DealReviewDecision[]
 
   @@unique([providerId, externalId])
   @@index([reviewStatus, updatedAt])
@@ -194,6 +219,23 @@ model DealCandidate {
   @@index([observedAt])
 }
 
+
+model DealReviewDecision {
+  id              String           @id @default(cuid())
+  tenantId        String
+  dealCandidateId String
+  reviewerId      String
+  decision        DealReviewStatus
+  reviewedAt      DateTime         @default(now())
+  createdAt       DateTime         @default(now())
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  dealCandidate   DealCandidate    @relation(fields: [dealCandidateId], references: [id], onDelete: Cascade)
+  reviewer        User             @relation(fields: [reviewerId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, dealCandidateId])
+  @@index([tenantId, decision, reviewedAt])
+  @@index([reviewerId, reviewedAt])
+}
 
 enum TestnetKillSwitchScope {
   GLOBAL
