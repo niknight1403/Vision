@@ -11,4 +11,8 @@ describe("outbox retry policy", () => {
     expect(retryDelaySeconds(20, 5)).toBe(3600);
     expect(retryDelaySeconds(0, 5)).toBe(5);
   });
+  it("rejects invalid retry configuration", () => {
+    expect(() => retryDelaySeconds(1, 0)).toThrow("INVALID_BASE_RETRY_SECONDS");
+    expect(() => retryDelaySeconds(1, Number.NaN)).toThrow("INVALID_BASE_RETRY_SECONDS");
+  });
 });
