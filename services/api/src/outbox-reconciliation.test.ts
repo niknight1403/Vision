@@ -32,7 +32,7 @@ describe("read-only outbox reconciliation", () => {
     const report = reconcileOutboxEvents([
       event({ id: "incomplete", status: "PROCESSING", lockedBy: null, leaseUntil: null, publishedAt: null }),
       event({ id: "expired", status: "PROCESSING", lockedBy: "worker-a", leaseUntil: new Date("2026-11-20T11:59:00.000Z"), publishedAt: null }),
-      event({ id: "unexpected", status: "PENDING", lockedBy: "worker-b", leaseUntil: null, publishedAt: null }),
+      event({ id: "unexpected", status: "PENDING", lockedBy: "worker-b", leaseUntil: null, publishedAt: null, availableAt: now }),
     ], {}, { now });
     expect(report.findings.map((finding) => [finding.eventId, finding.code])).toEqual([
       ["incomplete", "PROCESSING_LEASE_INCOMPLETE"],
