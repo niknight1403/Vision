@@ -8,7 +8,6 @@ const prisma = new PrismaClient();
 let tenantId = "";
 let otherTenantId = "";
 const transactionIds: string[] = [];
-const referenceIds: string[] = [];
 
 suite("double-entry journal (PostgreSQL)", () => {
   beforeAll(async () => {
@@ -31,7 +30,6 @@ suite("double-entry journal (PostgreSQL)", () => {
   });
 
   function posting(referenceId: string) {
-    referenceIds.push(referenceId);
     return {
       tenantId, referenceId, currency: "EUR", description: "Integration test journal posting",
       entries: [
