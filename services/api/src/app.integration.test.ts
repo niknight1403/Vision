@@ -233,7 +233,7 @@ suite("authenticated deal review routes (RBAC)", () => {
     const second = await app.inject({
       method: "POST",
       url: `/v1/deals/${deal.id}/review`,
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(adminEmail) },
       payload: { decision: "REJECTED" },
     });
     expect(second.statusCode).toBe(200);
@@ -247,7 +247,7 @@ suite("authenticated deal review routes (RBAC)", () => {
     const response = await app.inject({
       method: "POST",
       url: `/v1/deals/${deal.id}/review`,
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(adminEmail) },
       payload: { decision: "APPROVED" },
     });
     expect(response.statusCode).toBe(422);
@@ -260,7 +260,7 @@ suite("authenticated deal review routes (RBAC)", () => {
     const invalidDecision = await app.inject({
       method: "POST",
       url: `/v1/deals/${deal.id}/review`,
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(adminEmail) },
       payload: { decision: "PUBLISHED" },
     });
     expect(invalidDecision.statusCode).toBe(400);
@@ -269,7 +269,7 @@ suite("authenticated deal review routes (RBAC)", () => {
     const missing = await app.inject({
       method: "POST",
       url: "/v1/deals/does-not-exist/review",
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(adminEmail) },
       payload: { decision: "REJECTED" },
     });
     expect(missing.statusCode).toBe(404);
