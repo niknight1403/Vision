@@ -1,4 +1,5 @@
 import { Prisma, PrismaClient } from "@prisma/client";
+import { enqueueOutboxEvent } from "./outbox-service.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -76,7 +77,7 @@ export async function reserveFunds(
       where: { id: account.id },
       data: { reservedCents: { increment: input.amountCents }, version: { increment: 1 } },
     });
-    await tx.walletLedger.create({
+    const ledgerEntry = await tx.walletLedger.create({
       data: {
         accountId: account.id,
         entryType: "RESERVATION",
@@ -84,6 +85,21 @@ export async function reserveFunds(
         referenceId: input.referenceId,
         correlationId: input.correlationId,
         description: input.description,
+      },
+    });
+    await enqueueOutboxEvent(tx, {
+      eventType: "wallet.reservation.created",
+      aggregateId: account.id,
+      correlationId: input.correlationId ?? input.referenceId,
+      schemaVersion: 1,
+      payload: {
+        tenantId: input.tenantId,
+        accountId: account.id,
+        ledgerEntryId: ledgerEntry.id,
+        referenceId: input.referenceId,
+        amountCents: input.amountCents.toString(),
+        currency: account.currency,
+        eventType: "RESERVATION",
       },
     });
     return snapshot(tx, input);
@@ -154,7 +170,7 @@ export async function releaseFunds(
       where: { id: account.id },
       data: { reservedCents: { decrement: input.amountCents }, version: { increment: 1 } },
     });
-    await tx.walletLedger.create({
+    const ledgerEntry = await tx.walletLedger.create({
       data: {
         accountId: account.id,
         entryType: "RESERVATION_RELEASE",
@@ -163,6 +179,22 @@ export async function releaseFunds(
         reservationReferenceId: input.reservationReferenceId,
         correlationId: input.correlationId,
         description: input.description,
+      },
+    });
+    await enqueueOutboxEvent(tx, {
+      eventType: "wallet.reservation.released",
+      aggregateId: account.id,
+      correlationId: input.correlationId ?? input.referenceId,
+      schemaVersion: 1,
+      payload: {
+        tenantId: input.tenantId,
+        accountId: account.id,
+        ledgerEntryId: ledgerEntry.id,
+        referenceId: input.referenceId,
+        reservationReferenceId: input.reservationReferenceId,
+        amountCents: input.amountCents.toString(),
+        currency: account.currency,
+        eventType: "RESERVATION_RELEASE",
       },
     });
     return snapshot(tx, input);
