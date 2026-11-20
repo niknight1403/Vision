@@ -74,13 +74,13 @@ When a future supported command changes financial state, its single database tra
 
 Do not call an external payment provider while holding the database transaction open. Use an outbox/inbox pattern: persist intent, dispatch asynchronously, authenticate the callback, deduplicate its provider event ID, then apply the authoritative transition in a new serializable transaction.
 
-The current journal postJournalTransaction helper can be used inside a Prisma transaction only after its API is refactored to accept a transaction client. It currently owns its own PrismaClient transaction; nesting that helper inside a wallet transaction would break the required atomic boundary. This refactor is a prerequisite, not an optional optimization.
+The journal API now exposes `postJournalTransactionInTransaction(tx, input)` for a caller-owned Prisma transaction, while `postJournalTransaction(prisma, input)` retains its standalone SERIALIZABLE transaction and retry behavior. A future supported wallet command can therefore include journal posting in the same transaction, provided the outer transaction owns the isolation level and retries the entire operation. This primitive is available but is not yet wired into reservation/release or any deposit, purchase, payout, or refund flow.
 
 ## 6. Idempotency and data-model review gates
 
 Before adding payment commands, review these existing constraints together:
 
-- WalletLedger.referenceId is globally unique. Decide whether it represents a globally unique command ID or should become tenant/operation-scoped with an explicit compound unique constraint.
+- `WalletLedger.referenceId` is globally unique. The current reservation/release services use it as a global command reference and reject an existing reference when account, entry type, amount, or (for releases) source reservation differs. The wallet row is tenant/owner scoped before this check. This prevents cross-account reuse but also means two tenants cannot independently reuse the same reference string. The services do not currently persist a canonical request hash, and descriptive/correlation metadata is not part of the conflict comparison. Before broadening financial commands, decide whether to retain globally unique references or migrate to tenant/operation-scoped idempotency with an explicit compound key and payload-hash conflict detection.
 - WalletLedger.reservationReferenceId points to a source ledger reference. Preserve the invariant that the source is a RESERVATION on the same wallet and tenant.
 - Provider event IDs need a durable inbox/deduplication record including provider, environment, event type, payload hash, received time, and processing result.
 - Journal idempotency currently uses tenant + reference. Define a canonical reference namespace for every lifecycle operation and preserve payload-hash conflict detection.
@@ -159,3 +159,18 @@ The existing `reconcileWalletJournal` helper is a read-only tenant/owner/account
 The account-code convention is currently a technical comparison convention, not an approved complete chart of accounts or a payment/settlement accounting policy. The helper must not be extended to classify reservations as expenses, seller liabilities, captures, payouts, refunds, or settlements without finance-owner approval. Its current integration tests create an explicit journal fixture to verify the comparison and verify tenant/owner scoping.
 
 Before connecting reconciliation to automated operational holds or settlement workflows, approve the chart-of-accounts mapping, treatment of opening balances, and lifecycle event semantics. No provider calls or financial postings are enabled by this helper.
+
+
+## 12. Sprint 3.12 — verified idempotency boundary
+
+This checkpoint records implementation facts, not an approval of a new financial policy:
+
+- Reservation and release commands require a non-empty reference and perform the tenant/owner/account-scoped wallet lock before checking for an existing ledger reference.
+- An identical retry for the implemented command fields returns the current wallet snapshot without creating another ledger row or outbox event.
+- A conflicting reuse is rejected with `IDEMPOTENCY_CONFLICT` when account, entry type, amount, or release source reservation differs.
+- The database constraint on `WalletLedger.referenceId` is global, not tenant-scoped. A reference collision across tenants therefore cannot create a second command; it is rejected, but independent tenants cannot reuse the same reference string.
+- There is no canonical payload hash persisted for wallet commands. Description and correlation ID are not currently part of the idempotency comparison.
+- The journal has a separate tenant-scoped unique key `(tenantId, referenceId)` and a stored `payloadHash`; these are not yet unified with wallet command idempotency.
+- `postJournalTransactionInTransaction` is available for a future atomic command, but no current wallet lifecycle mutation posts a journal transaction.
+
+No schema or runtime behavior is changed by this checkpoint. Do not weaken the global unique constraint or introduce a compound-key migration until reference namespace, backfill, collision handling, and two-tenant concurrency behavior are reviewed together. Deposit, purchase, fee, shipping, settlement, payout, refund, chargeback, and adjustment commands remain blocked.
