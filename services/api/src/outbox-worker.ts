@@ -75,10 +75,10 @@ async function markPublished(prisma: PrismaClient, id: string, workerId: string)
 export function sanitizeOutboxError(error: unknown): string {
   const raw = error instanceof Error ? error.message : "Unknown handler error";
   return raw
-    .replace(/(authorization\\s*[:=]\\s*)(?:bearer\\s+)?[^\\s,;]+/gi, "$1[REDACTED]")
-    .replace(/\\bbearer\\s+[A-Za-z0-9._~+\\/-]+=*/gi, "Bearer [REDACTED]")
-    .replace(/\\b(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret)\\b(\\s*[:=]\\s*)[^\\s,;]+/gi, "$1$2[REDACTED]")
-    .replace(/(https?:\\/\\/)[^\\s/@:]+:[^\\s/@]+@/gi, "$1[REDACTED]@")
+    .replace(/(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/gi, "$1[REDACTED]")
+    .replace(/\bbearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [REDACTED]")
+    .replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret)\b(\s*[:=]\s*)[^\s,;]+/gi, "$1$2[REDACTED]")
+    .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1[REDACTED]@")
     .slice(0, 2000);
 }
 
