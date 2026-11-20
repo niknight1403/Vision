@@ -17,7 +17,9 @@ The worker uses bounded exponential backoff (default 5 seconds, capped at one ho
 
 The API now provides an opt-in `OutboxConsumerRegistry` that dispatches only an exact registered pair of event type and schema version. It deliberately has no fallback to the latest or nearest version: an unknown event or version fails before the consumer handler runs, so incompatible payloads cannot silently reach a side effect. Register each supported version explicitly and keep old handlers registered while old events may still be pending or replayed.
 
-This registry is a dispatch guard, not a complete inbox/idempotency implementation. It does not persist consumer receipts and cannot make external side effects exactly-once. Consumers must still use the immutable event ID as a durable idempotency key at the downstream boundary. A transactional inbox table and end-to-end duplicate-delivery integration test remain required before enabling financial consumers.
+The API also provides `processOutboxEventInTransaction`, backed by a durable `OutboxConsumerReceipt` unique on `(consumerName, eventId)`. Call it inside the same Prisma transaction as the consumer's database writes. The receipt and those writes commit or roll back together; a repeated delivery for that consumer returns `DUPLICATE` without running the handler. The PostgreSQL integration tests cover repeat delivery, independent consumers, and rollback/retry.
+
+This inbox protects transactional database effects only. It does not make remote HTTP/payment/provider side effects exactly-once, and it is not automatically wired into every `processOneOutboxMessage` handler. Financial consumers must explicitly use the transactional helper; remote effects still require downstream idempotency keyed by immutable event ID, reconciliation, and a carefully designed dispatch boundary.
 
 ## Required operational signals
 
