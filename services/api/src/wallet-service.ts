@@ -137,7 +137,7 @@ export async function releaseFundsInTransaction(
   if (!input.reservationReferenceId.trim()) throw new Error("RESERVATION_REFERENCE_REQUIRED");
   if (!input.ownerId.trim() || !input.tenantId.trim()) throw new Error("WALLET_OWNER_REQUIRED");
 
-  return prisma.$transaction(async (tx) => {
+  return (async () => {
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id FROM "WalletAccount" WHERE id = ${input.accountId} AND "ownerId" = ${input.ownerId} AND "tenantId" = ${input.tenantId} FOR UPDATE
     `;
