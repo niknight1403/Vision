@@ -240,7 +240,7 @@ suite("authenticated deal review routes (RBAC)", () => {
     expect(await prisma.dealReview.count({ where: { candidateId: deal.id } })).toBe(0);
   });
 
-  it("lets an admin approve once and rejects the repeated decision", async () => {
+  it("allows a tenant admin to update the review in its own tenant", async () => {
     const deal = await createDeal();
     const { accessToken } = await login(adminEmail);
     const first = await app.inject({
@@ -263,6 +263,33 @@ suite("authenticated deal review routes (RBAC)", () => {
     expect(second.statusCode).toBe(200);
     expect(second.json().review.decision).toBe("REJECTED");
     expect(await prisma.dealReview.count({ where: { tenantId: tenantByEmail.get(adminEmail), candidateId: deal.id } })).toBe(1);
+  });
+
+  it("keeps one tenant's deal review invisible to another tenant", async () => {
+    const deal = await createDeal();
+    const admin = await login(adminEmail);
+    const approved = await app.inject({
+      method: "POST",
+      url: `/v1/deals/${deal.id}/review`,
+      headers: { authorization: `Bearer ${admin.accessToken}`, ...tenantHeader(adminEmail) },
+      payload: { decision: "APPROVED" },
+    });
+    expect(approved.statusCode).toBe(200);
+
+    const viewer = await login(viewerEmail);
+    const listed = await app.inject({
+      method: "GET",
+      url: "/v1/deals?limit=100",
+      headers: { authorization: `Bearer ${viewer.accessToken}`, ...tenantHeader(viewerEmail) },
+    });
+    expect(listed.statusCode).toBe(200);
+    const otherTenantDeal = (listed.json() as { deals: Array<{ id: string; reviewStatus: string }> })
+      .deals.find((entry) => entry.id === deal.id);
+    expect(otherTenantDeal?.reviewStatus).toBe("DISCOVERED");
+
+    const sharedCandidate = await prisma.dealCandidate.findUniqueOrThrow({ where: { id: deal.id } });
+    expect(sharedCandidate.reviewStatus).toBe("DISCOVERED");
+    expect(sharedCandidate.reviewedBy).toBeNull();
   });
 
   it("refuses to approve a simulated or risk-rejected candidate", async () => {
