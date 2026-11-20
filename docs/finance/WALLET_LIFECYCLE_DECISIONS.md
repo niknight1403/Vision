@@ -192,13 +192,13 @@ The wallet commands have a different boundary today:
 
 This is a concrete integration gap, not a failed atomicity guarantee for the existing wallet command. Its three existing writes remain in one transaction. Do not work around the gap by invoking `postJournalTransaction` from inside a wallet transaction or by opening a second transaction: that would break the intended all-or-nothing boundary.
 
-Safe follow-up design, pending finance-owner approval of accounting semantics:
+Implemented technical composition primitives:
 
-1. Extract transaction-client variants for wallet reserve/release that perform only the wallet lock, validation, counter mutation, ledger append, and existing wallet outbox enqueue.
-2. Keep the current public PrismaClient wrappers, preserving SERIALIZABLE isolation and retry behavior.
-3. Let a future, separately approved application command own one SERIALIZABLE outer transaction and compose the wallet transaction-client helper, `postJournalTransactionInTransaction`, and any additional outbox event.
-4. Retry the entire outer transaction on serialization failure; never retry only one component.
-5. Add PostgreSQL integration tests proving all writes commit together and all roll back together, including a failure after journal finalization and before outer commit.
-6. Keep the journal account mapping and event semantics behind an explicit finance-owner decision. Do not add a journal posting to current reserve/release flows merely to demonstrate technical composition.
+1. `reserveFundsInTransaction(tx, input)` and `releaseFundsInTransaction(tx, input)` now accept a caller-owned Prisma transaction and preserve the existing wallet lock, validations, counter mutation, ledger append, and wallet outbox enqueue.
+2. Existing `reserveFunds(prisma, input)` and `releaseFunds(prisma, input)` remain compatibility wrappers that open SERIALIZABLE transactions and delegate to the transaction-client variants.
+3. PostgreSQL integration coverage composes wallet reservation, a test-only balanced journal posting, and an additional outbox event in one outer SERIALIZABLE transaction. It asserts both complete rollback and complete commit.
+4. A separate integration test exercises partial release through the caller-owned transaction variant.
+5. The outer application command remains responsible for SERIALIZABLE isolation and retrying the entire transaction on serialization failure.
+6. Test-only account codes prove technical atomicity; they are not an approved chart of accounts. No journal posting has been added to production reserve/release behavior.
 
-No wallet service code, schema, accounting mapping, provider call, payment command, or production behavior is changed by this audit checkpoint.
+No schema, accounting mapping, provider call, payment command, or production lifecycle semantics are changed.
