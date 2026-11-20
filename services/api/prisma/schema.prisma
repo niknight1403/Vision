@@ -151,6 +151,18 @@ model OutboxEvent {
 
   @@index([status, availableAt])
   @@index([leaseUntil])
+  consumerReceipts OutboxConsumerReceipt[]
+}
+
+model OutboxConsumerReceipt {
+  id           String      @id @default(cuid())
+  consumerName String      @db.VarChar(128)
+  eventId      String
+  processedAt  DateTime    @default(now())
+  event        OutboxEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
+
+  @@unique([consumerName, eventId])
+  @@index([consumerName, processedAt])
 }
 
 model IdempotencyKey {
