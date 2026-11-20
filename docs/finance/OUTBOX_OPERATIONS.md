@@ -19,6 +19,8 @@ The API now provides an opt-in `OutboxConsumerRegistry` that dispatches only an 
 
 The API also provides `processOutboxEventInTransaction`, backed by a durable `OutboxConsumerReceipt` unique on `(consumerName, eventId)`. Call it inside the same Prisma transaction as the consumer's database writes. The receipt and those writes commit or roll back together; a repeated delivery for that consumer returns `DUPLICATE` without running the handler. The PostgreSQL integration tests cover repeat delivery, independent consumers, and rollback/retry.
 
+The outbox worker exposes `processOneOutboxMessageWithInbox` for database-only consumers. It claims the event, runs the inbox helper in a Prisma transaction, and acknowledges the outbox row only after that transaction commits. If the process stops after the receipt commit but before the outbox acknowledgement, a later delivery observes the receipt, skips the handler, and acknowledges the event. Integration tests cover this crash-window redelivery path. The helper must not be used to wrap non-transactional remote calls.
+
 This inbox protects transactional database effects only. It does not make remote HTTP/payment/provider side effects exactly-once, and it is not automatically wired into every `processOneOutboxMessage` handler. Financial consumers must explicitly use the transactional helper; remote effects still require downstream idempotency keyed by immutable event ID, reconciliation, and a carefully designed dispatch boundary.
 
 ## Required operational signals
