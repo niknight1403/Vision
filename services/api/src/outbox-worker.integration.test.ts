@@ -29,7 +29,7 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
 
     await expect(processOneOutboxMessage(
       prisma,
-      { workerId: "worker-one", leaseSeconds: 30 },
+      { workerId: "worker-one", leaseSeconds: 30, eventTypes: ["test.lease.race"] },
       async (message) => {
         await prisma.outboxEvent.updateMany({
           where: { id: message.id, status: "PROCESSING", lockedBy: "worker-one" },
@@ -62,7 +62,7 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
 
     const result = await processOneOutboxMessage(
       prisma,
-      { workerId: "worker-retry", baseRetrySeconds: 5 },
+      { workerId: "worker-retry", baseRetrySeconds: 5, eventTypes: ["test.retry"] },
       async () => { throw new Error("temporary downstream outage"); },
     );
     expect(result).toBe("RETRY_SCHEDULED");
