@@ -125,7 +125,7 @@ export async function releaseFunds(
           existing.reservationReferenceId !== input.reservationReferenceId) {
         throw new Error("IDEMPOTENCY_CONFLICT");
       }
-      return snapshot(tx, input.accountId);
+      return snapshot(tx, input);
     }
 
     const originalReservation = await tx.walletLedger.findUnique({
@@ -166,6 +166,6 @@ export async function releaseFunds(
         description: input.description,
       },
     });
-    return snapshot(tx, input.accountId);
+    return snapshot(tx, input);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
