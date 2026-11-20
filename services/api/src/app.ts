@@ -4,7 +4,7 @@ import helmet from "@fastify/helmet";
 import cors from "@fastify/cors";
 import type { DealCandidate, PrismaClient } from "@prisma/client";
 import { config } from "./config.js";
-import { authenticateBearerToken, requireAdmin, type AuthenticatedPrincipal } from "./auth-service.js";
+import { authenticateBearerToken, requireAdmin, requireTenantAdmin, resolveTenantContext, type AuthenticatedPrincipal } from "./auth-service.js";
 import { loginWithPassword, revokeRefreshToken, rotateRefreshToken } from "./auth-session-service.js";
 import { listDealCandidates, reviewDealCandidate } from "./deal-candidate-service.js";
 
@@ -40,7 +40,7 @@ const STATUS_BY_ERROR: Readonly<Record<string, number>> = Object.freeze({
   DEAL_REVIEW_CONFLICT: 409,
   DEAL_NOT_ELIGIBLE_FOR_REVIEW_APPROVAL: 422,
   DEAL_REVIEW_FIELDS_REQUIRED: 400,
-  DEAL_LIST_LIMIT_INVALID: 400,
+  DEAL_LIST_LIMIT_INVALID: 400,\n  TENANT_CONTEXT_REQUIRED: 400,\n  TENANT_ACCESS_DENIED: 404,\n  TENANT_ADMIN_ROLE_REQUIRED: 403,
   VISION_INSPECTOR_NOT_CONFIGURED: 503,
   VISION_IMAGE_URL_REQUIRED: 400,
   TREASURE_ANALYSIS_IDEMPOTENCY_REQUIRED: 400,
@@ -101,7 +101,7 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     return reply.code(status).send({ error: code });
   }
 
-  async function principalFrom(request: FastifyRequest): Promise<AuthenticatedPrincipal> {
+  async function tenantFrom(request: FastifyRequest, principal: AuthenticatedPrincipal) {\n    const requestedTenantId = request.headers["x-tenant-id"];\n    return await resolveTenantContext(prisma, principal, typeof requestedTenantId === "string" ? requestedTenantId : undefined);\n  }\n\n  async function principalFrom(request: FastifyRequest): Promise<AuthenticatedPrincipal> {
     return await authenticateBearerToken(
       prisma,
       request.headers.authorization,
@@ -165,6 +165,20 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     }
   });
 
+  app.get("/v1/tenants", async (request, reply) => {
+    try {
+      const principal = await principalFrom(request);
+      const memberships = await prisma.tenantMembership.findMany({
+        where: { userId: principal.userId },
+        include: { tenant: { select: { id: true, name: true } } },
+        orderBy: { createdAt: "asc" },
+      });
+      return reply.code(200).send({ tenants: memberships.map((membership) => ({
+        id: membership.tenant.id, name: membership.tenant.name, role: membership.role,
+      })) });
+    } catch (error) { return fail(reply, error); }
+  });
+
   app.get("/v1/deals", async (request, reply) => {
     try {
       await principalFrom(request);
@@ -220,7 +234,7 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
         currency: deal.currency };
       const inputHash = createHash("sha256").update(JSON.stringify(input)).digest("hex");
       const idempotencyKey = createHash("sha256").update(principal.userId + ":" + suppliedKey).digest("hex");
-      const existing = await prisma.agentTask.findUnique({ where: { idempotencyKey } });
+      const existing = await prisma.agentTask.findUnique({ where: { tenantId_idempotencyKey: { tenantId: tenant.tenantId, idempotencyKey } } });
       if (existing) {
         if (existing.inputHash !== inputHash) throw new Error("TREASURE_ANALYSIS_IDEMPOTENCY_CONFLICT");
         return reply.code(202).send({ taskId: existing.id, status: existing.status,
@@ -283,18 +297,25 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
   app.post("/v1/deals/:dealId/review", async (request, reply) => {
     try {
       const principal = await principalFrom(request);
-      requireAdmin(principal);
+      const tenant = await tenantFrom(request, principal);
+      requireTenantAdmin(tenant);
       const { dealId } = request.params as { dealId: string };
       const body = request.body as { decision?: unknown } | undefined;
       if (typeof body?.decision !== "string" || !REVIEW_DECISIONS.includes(body.decision as ReviewDecision)) {
         return reply.code(400).send({ error: "DEAL_REVIEW_DECISION_INVALID" });
       }
-      const reviewed = await reviewDealCandidate(prisma, {
-        dealId,
-        reviewerId: principal.userId,
-        decision: body.decision as ReviewDecision,
+      const candidate = await prisma.dealCandidate.findUnique({ where: { id: dealId } });
+      if (!candidate) throw new Error("DEAL_CANDIDATE_NOT_FOUND");
+      if (body.decision === "APPROVED" && (candidate.simulated || !candidate.riskPassed)) {
+        throw new Error("DEAL_NOT_ELIGIBLE_FOR_REVIEW_APPROVAL");
+      }
+      const reviewed = await prisma.dealReview.upsert({
+        where: { tenantId_candidateId: { tenantId: tenant.tenantId, candidateId: dealId } },
+        create: { tenantId: tenant.tenantId, candidateId: dealId, reviewerUserId: principal.userId, decision: body.decision as ReviewDecision },
+        update: { reviewerUserId: principal.userId, decision: body.decision as ReviewDecision, reviewedAt: now() },
       });
-      return reply.code(200).send({ deal: serializeDeal(reviewed) });
+      return reply.code(200).send({ review: { candidateId: reviewed.candidateId, decision: reviewed.decision,
+        reviewerUserId: reviewed.reviewerUserId, reviewedAt: reviewed.reviewedAt.toISOString() } });
     } catch (error) {
       return fail(reply, error);
     }
