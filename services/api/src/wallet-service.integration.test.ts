@@ -41,6 +41,16 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
 
   const walletScope = () => ({ ownerId, tenantId });
 
+  it("refuses wallet access with a mismatched tenant or owner", async () => {
+    await expect(reserveFunds(prisma, {
+      accountId, ownerId: "another-user", tenantId,
+      amountCents: 1_000n, referenceId: "wrong-tenant-reservation", description: "must not reserve",
+    })).rejects.toThrow("WALLET_NOT_FOUND");
+    const account = await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } });
+    expect(account.reservedCents).toBe(0n);
+    expect(await prisma.walletLedger.count({ where: { accountId } })).toBe(0);
+  });
+
   it("binds an idempotent release to its source reservation", async () => {
     await reserveFunds(prisma, {
       accountId, ...walletScope(), amountCents: 4_000n, referenceId: "reservation-idempotent", description: "test reservation",
