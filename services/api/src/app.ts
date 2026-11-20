@@ -6,7 +6,7 @@ import type { DealCandidate, PrismaClient } from "@prisma/client";
 import { config } from "./config.js";
 import { authenticateBearerToken, requireTenantAdmin, resolveTenantContext, type AuthenticatedPrincipal } from "./auth-service.js";
 import { loginWithPassword, revokeRefreshToken, rotateRefreshToken } from "./auth-session-service.js";
-import { listDealCandidates, reviewDealCandidate } from "./deal-candidate-service.js";
+import { listDealCandidates } from "./deal-candidate-service.js";
 
 export interface ServerDependencies {
   prisma: PrismaClient;
@@ -44,9 +44,9 @@ const STATUS_BY_ERROR: Readonly<Record<string, number>> = Object.freeze({
   DEAL_NOT_ELIGIBLE_FOR_REVIEW_APPROVAL: 422,
   DEAL_REVIEW_FIELDS_REQUIRED: 400,
   DEAL_LIST_LIMIT_INVALID: 400,
-  TENANT_CONTEXT_REQUIRED: 400,
-  TENANT_ACCESS_DENIED: 404,
-  TENANT_ADMIN_ROLE_REQUIRED: 403,
+
+
+
   VISION_INSPECTOR_NOT_CONFIGURED: 503,
   VISION_IMAGE_URL_REQUIRED: 400,
   TREASURE_ANALYSIS_IDEMPOTENCY_REQUIRED: 400,
@@ -174,20 +174,6 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     } catch (error) {
       return fail(reply, error);
     }
-  });
-
-  app.get("/v1/tenants", async (request, reply) => {
-    try {
-      const principal = await principalFrom(request);
-      const memberships = await prisma.tenantMembership.findMany({
-        where: { userId: principal.userId },
-        include: { tenant: { select: { id: true, name: true } } },
-        orderBy: { createdAt: "asc" },
-      });
-      return reply.code(200).send({ tenants: memberships.map((membership) => ({
-        id: membership.tenant.id, name: membership.tenant.name, role: membership.role,
-      })) });
-    } catch (error) { return fail(reply, error); }
   });
 
   app.get("/v1/tenants", async (request, reply) => {
