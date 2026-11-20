@@ -53,7 +53,7 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     const retry = await releaseFunds(prisma, input);
     expect(first.reservedCents).toBe(0n);
     expect(retry.reservedCents).toBe(0n);
-    expect(await prisma.walletLedger.count({ where: { accountId, ...walletScope(), entryType: "RESERVATION_RELEASE" } })).toBe(1);
+    expect(await prisma.walletLedger.count({ where: { accountId, entryType: "RESERVATION_RELEASE" } })).toBe(1);
     const entry = await prisma.walletLedger.findUniqueOrThrow({ where: { referenceId: input.referenceId } });
     expect(entry.reservationReferenceId).toBe("reservation-idempotent");
   });
