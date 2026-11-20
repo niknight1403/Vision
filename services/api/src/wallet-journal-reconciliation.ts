@@ -30,8 +30,10 @@ export type WalletJournalPolicy = {
 };
 
 export type WalletJournalFinding = {
-  code: "POLICY_NOT_CONFIGURED" | "JOURNAL_NOT_FOUND" | "JOURNAL_NOT_POSTED" |
-    "CURRENCY_MISMATCH" | "JOURNAL_UNBALANCED" | "JOURNAL_LINES_MISMATCH";
+  code: "POLICY_NOT_CONFIGURED" | "INVALID_WALLET_EVIDENCE" | "INVALID_POLICY" |
+    "JOURNAL_NOT_FOUND" | "AMBIGUOUS_JOURNAL_REFERENCE" | "JOURNAL_NOT_POSTED" |
+    "CURRENCY_MISMATCH" | "JOURNAL_UNBALANCED" | "JOURNAL_LINES_INVALID" |
+    "JOURNAL_LINES_MISMATCH";
   severity: "WARNING" | "CRITICAL";
   walletLedgerId: string;
   walletReferenceId: string;
@@ -49,55 +51,89 @@ function canonicalLines(lines: WalletJournalLine[]) {
     a.creditCents.localeCompare(b.creditCents));
 }
 
+function validLines(lines: WalletJournalLine[]) {
+  return lines.length >= 2 && lines.every((line) =>
+    line.accountCode.trim().length > 0 &&
+    line.debitCents >= 0n &&
+    line.creditCents >= 0n &&
+    !(line.debitCents > 0n && line.creditCents > 0n) &&
+    (line.debitCents > 0n || line.creditCents > 0n));
+}
+
+function balanced(lines: WalletJournalLine[]) {
+  const debit = lines.reduce((sum, line) => sum + line.debitCents, 0n);
+  const credit = lines.reduce((sum, line) => sum + line.creditCents, 0n);
+  return debit > 0n && debit === credit;
+}
+
 /**
- * Compares wallet and journal evidence only when the caller supplies an
- * explicit policy for that wallet ledger row. No accounting treatment,
- * reference convention, or account code is inferred here.
+ * Read-only evidence comparison. Accounting semantics and reference conventions
+ * are supplied by the caller; none are inferred from wallet event types.
  */
 export function reconcileWalletJournalEvidence(
   walletEntries: WalletJournalEvidence[],
   journals: JournalEvidence[],
   policies: Record<string, WalletJournalPolicy>,
 ) {
-  const journalByScopeAndReference = new Map(
-    journals.map((journal) => [`${journal.tenantId}\u0000${journal.referenceId}`, journal]),
-  );
+  const journalsByScopeAndReference = new Map<string, JournalEvidence[]>();
+  for (const journal of journals) {
+    const key = `${journal.tenantId}\u0000${journal.referenceId}`;
+    const matches = journalsByScopeAndReference.get(key) ?? [];
+    matches.push(journal);
+    journalsByScopeAndReference.set(key, matches);
+  }
+
   const findings: WalletJournalFinding[] = [];
-
   for (const wallet of walletEntries) {
-    const policy = policies[wallet.walletLedgerId];
-    if (!policy) {
-      findings.push({
-        code: "POLICY_NOT_CONFIGURED", severity: "WARNING",
-        walletLedgerId: wallet.walletLedgerId, walletReferenceId: wallet.walletReferenceId,
-      });
-      continue;
-    }
-
-    const journal = journalByScopeAndReference.get(
-      `${wallet.tenantId}\u0000${policy.journalReferenceId}`,
-    );
     const base = {
       walletLedgerId: wallet.walletLedgerId,
       walletReferenceId: wallet.walletReferenceId,
-      journalReferenceId: policy.journalReferenceId,
     };
-    if (!journal) {
-      findings.push({ code: "JOURNAL_NOT_FOUND", severity: "CRITICAL", ...base });
+    if (!wallet.walletLedgerId.trim() || !wallet.tenantId.trim() ||
+        !wallet.walletReferenceId.trim() || !wallet.entryType.trim() ||
+        !wallet.currency.trim() || wallet.amountCents <= 0n) {
+      findings.push({ code: "INVALID_WALLET_EVIDENCE", severity: "CRITICAL", ...base });
       continue;
     }
-    if (!journal.postedAt) findings.push({ code: "JOURNAL_NOT_POSTED", severity: "CRITICAL", ...base });
-    if (journal.currency.toUpperCase() !== wallet.currency.toUpperCase()) {
-      findings.push({ code: "CURRENCY_MISMATCH", severity: "CRITICAL", ...base });
+
+    if (!Object.hasOwn(policies, wallet.walletLedgerId)) {
+      findings.push({ code: "POLICY_NOT_CONFIGURED", severity: "WARNING", ...base });
+      continue;
     }
-    const debit = journal.entries.reduce((sum, line) => sum + line.debitCents, 0n);
-    const credit = journal.entries.reduce((sum, line) => sum + line.creditCents, 0n);
-    if (journal.entries.length < 2 || debit <= 0n || debit !== credit) {
-      findings.push({ code: "JOURNAL_UNBALANCED", severity: "CRITICAL", ...base });
+    const policy = policies[wallet.walletLedgerId];
+    const policyBase = { ...base, journalReferenceId: policy.journalReferenceId };
+    if (!policy.journalReferenceId.trim() || !validLines(policy.expectedLines) ||
+        !balanced(policy.expectedLines)) {
+      findings.push({ code: "INVALID_POLICY", severity: "CRITICAL", ...policyBase });
+      continue;
+    }
+
+    const matches = journalsByScopeAndReference.get(
+      `${wallet.tenantId}\u0000${policy.journalReferenceId}`,
+    ) ?? [];
+    if (matches.length === 0) {
+      findings.push({ code: "JOURNAL_NOT_FOUND", severity: "CRITICAL", ...policyBase });
+      continue;
+    }
+    if (matches.length > 1) {
+      findings.push({ code: "AMBIGUOUS_JOURNAL_REFERENCE", severity: "CRITICAL", ...policyBase });
+      continue;
+    }
+
+    const journal = matches[0];
+    if (!journal.postedAt) findings.push({ code: "JOURNAL_NOT_POSTED", severity: "CRITICAL", ...policyBase });
+    if (journal.currency.toUpperCase() !== wallet.currency.toUpperCase()) {
+      findings.push({ code: "CURRENCY_MISMATCH", severity: "CRITICAL", ...policyBase });
+    }
+    if (!validLines(journal.entries)) {
+      findings.push({ code: "JOURNAL_LINES_INVALID", severity: "CRITICAL", ...policyBase });
+    }
+    if (!balanced(journal.entries)) {
+      findings.push({ code: "JOURNAL_UNBALANCED", severity: "CRITICAL", ...policyBase });
     }
     if (JSON.stringify(canonicalLines(journal.entries)) !==
         JSON.stringify(canonicalLines(policy.expectedLines))) {
-      findings.push({ code: "JOURNAL_LINES_MISMATCH", severity: "CRITICAL", ...base });
+      findings.push({ code: "JOURNAL_LINES_MISMATCH", severity: "CRITICAL", ...policyBase });
     }
   }
 
