@@ -52,6 +52,23 @@ suite("double-entry journal (PostgreSQL)", () => {
     expect(await prisma.journalTransaction.count({ where: { tenantId } })).toBe(0);
   });
 
+  it("rejects a journal header that is not finalized with balanced entries at commit", async () => {
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.journalTransaction.create({
+        data: {
+          tenantId,
+          referenceId: "journal-unfinalized-header",
+          currency: "EUR",
+          description: "must fail at commit",
+          payloadHash: "a".repeat(64),
+        },
+      });
+    })).rejects.toThrow();
+    expect(await prisma.journalTransaction.count({
+      where: { tenantId, referenceId: "journal-unfinalized-header" },
+    })).toBe(0);
+  });
+
   it("posts atomically and returns the same transaction for an identical retry", async () => {
     const input = posting("journal-idempotent");
     const first = await postJournalTransaction(prisma, input);
@@ -81,7 +98,7 @@ suite("double-entry journal (PostgreSQL)", () => {
     })).toBe(1);
   });
 
-  it("prevents updates and deletes to posted journal records", async () => {
+  it("prevents updates, deletes, late inserts, and truncation of posted journal records", async () => {
     const transaction = await postJournalTransaction(prisma, posting("journal-immutable"));
     await expect(prisma.journalEntry.updateMany({
       where: { transactionId: transaction.id }, data: { debitCents: 1n },
@@ -101,6 +118,7 @@ suite("double-entry journal (PostgreSQL)", () => {
       },
     })).rejects.toThrow();
     await expect(prisma.$executeRawUnsafe('TRUNCATE TABLE "JournalEntry"')).rejects.toThrow();
+    await expect(prisma.$executeRawUnsafe('TRUNCATE TABLE "JournalTransaction"')).rejects.toThrow();
     expect(await prisma.journalEntry.count({ where: { transactionId: transaction.id } })).toBe(2);
   });
 
@@ -112,7 +130,7 @@ suite("double-entry journal (PostgreSQL)", () => {
         { accountCode: "BALANCE-SALES", creditCents: 12_500n },
       ],
     };
-    const transaction = await postJournalTransaction(prisma, input);
+    await postJournalTransaction(prisma, input);
     const [cash, sales, otherTenantCash] = await Promise.all([
       getJournalAccountBalance(prisma, { tenantId, accountCode: "BALANCE-CASH", currency: "EUR" }),
       getJournalAccountBalance(prisma, { tenantId, accountCode: "BALANCE-SALES", currency: "EUR" }),
@@ -124,8 +142,7 @@ suite("double-entry journal (PostgreSQL)", () => {
   });
 
   it("reconciles every tenant transaction and reports a clean result", async () => {
-    const input = posting("journal-reconcile");
-    const transaction = await postJournalTransaction(prisma, input);
+    await postJournalTransaction(prisma, posting("journal-reconcile"));
     const result = await reconcileJournal(prisma, { tenantId });
     expect(result.balanced).toBe(true);
     expect(result.imbalances).toHaveLength(0);
