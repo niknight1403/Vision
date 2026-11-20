@@ -197,3 +197,14 @@ Implemented technical composition primitives:
 6. Test-only account codes prove technical atomicity; they are not an approved chart of accounts. No journal posting has been added to production reserve/release behavior.
 
 No schema, accounting mapping, provider call, payment command, or production lifecycle semantics are changed.
+
+
+## 14. Sprint 3.14 — bounded serializable transaction retries
+
+- Added `runSerializableTransaction` as the shared wrapper for SERIALIZABLE Prisma transactions.
+- It retries the complete transaction callback only for Prisma `P2034` serialization/deadlock conflicts; default is three total attempts with a small linear delay.
+- Non-serialization errors pass through immediately. Exhausted retries surface the final Prisma error; configuration is bounded and validated.
+- Wallet reserve/release wrappers now delegate to this helper. Caller-owned `reserveFundsInTransaction` and `releaseFundsInTransaction` remain transaction primitives and do not retry independently; an outer composed command must retry its entire transaction using the helper.
+- Retried callbacks may execute more than once. They must contain database work only; remote/provider calls, notifications and other non-transactional effects must be represented by an outbox event and handled after commit.
+- Unit tests cover retry-on-P2034, no retry for business errors, attempt exhaustion, SERIALIZABLE isolation and invalid retry configuration.
+- This is transaction reliability plumbing only. It does not authorize journal account mappings, deposits, purchases, fees, payouts, refunds, chargebacks or provider execution.
