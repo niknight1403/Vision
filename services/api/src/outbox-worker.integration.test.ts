@@ -147,6 +147,31 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(current.attempts).toBe(1);
   });
 
+  it("does not dead-letter exhausted events outside the worker event-type filter", async () => {
+    const aggregateId = `outbox-filtered-budget-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.unsubscribed.worker",
+      aggregateId,
+      payload: { test: true },
+      status: "PROCESSING",
+      attempts: 2,
+      lockedBy: "other-worker",
+      leaseUntil: new Date(Date.now() - 1_000),
+    } });
+
+    const result = await processOneOutboxMessage(
+      prisma,
+      { workerId: "filtered-worker", maxAttempts: 2, eventTypes: ["test.subscribed.worker"] },
+      async () => { throw new Error("unrelated handler must not run"); },
+    );
+
+    expect(result).toBe("IDLE");
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("PROCESSING");
+    expect(current.lockedBy).toBe("other-worker");
+  });
+
   it("dead-letters an expired worker lease when crash retries exhaust the attempt budget", async () => {
     const aggregateId = `outbox-crash-budget-${process.pid}-${Date.now()}`;
     aggregateIds.push(aggregateId);
