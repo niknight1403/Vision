@@ -323,6 +323,75 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     }
   });
 
+  it("deduplicates concurrent identical partial releases", async () => {
+    await reserveFunds(prisma, {
+      accountId, ...walletScope(), amountCents: 4_000n,
+      referenceId: "reservation-concurrent-release-idempotent",
+      description: "concurrent release source",
+    });
+    const input = {
+      accountId, ...walletScope(), amountCents: 1_500n,
+      referenceId: "release-concurrent-idempotent",
+      reservationReferenceId: "reservation-concurrent-release-idempotent",
+      description: "concurrent identical partial release",
+    };
+    const results = await Promise.allSettled([
+      releaseFunds(prisma, input),
+      releaseFunds(prisma, input),
+    ]);
+
+    expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+    expect(await prisma.walletLedger.count({
+      where: { accountId, referenceId: input.referenceId, entryType: "RESERVATION_RELEASE" },
+    })).toBe(1);
+    expect(await prisma.outboxEvent.count({
+      where: { aggregateId: accountId, eventType: "wallet.reservation.released", correlationId: input.referenceId },
+    })).toBe(1);
+    const account = await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } });
+    expect(account.reservedCents).toBe(2_500n);
+  });
+
+  it("serializes concurrent distinct partial releases against the source reservation limit", async () => {
+    await reserveFunds(prisma, {
+      accountId, ...walletScope(), amountCents: 4_000n,
+      referenceId: "reservation-concurrent-partial-limit",
+      description: "concurrent partial release limit source",
+    });
+    const common = {
+      accountId, ...walletScope(), amountCents: 2_500n,
+      reservationReferenceId: "reservation-concurrent-partial-limit",
+    };
+    const results = await Promise.allSettled([
+      releaseFunds(prisma, {
+        ...common, referenceId: "release-concurrent-partial-a",
+        description: "concurrent partial release A",
+      }),
+      releaseFunds(prisma, {
+        ...common, referenceId: "release-concurrent-partial-b",
+        description: "concurrent partial release B",
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const releases = await prisma.walletLedger.findMany({
+      where: {
+        accountId, entryType: "RESERVATION_RELEASE",
+        reservationReferenceId: common.reservationReferenceId,
+      },
+    });
+    expect(releases).toHaveLength(1);
+    expect(releases[0]?.amountCents).toBe(2_500n);
+    expect(await prisma.outboxEvent.count({
+      where: {
+        aggregateId: accountId, eventType: "wallet.reservation.released",
+        correlationId: { in: ["release-concurrent-partial-a", "release-concurrent-partial-b"] },
+      },
+    })).toBe(1);
+    const account = await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } });
+    expect(account.reservedCents).toBe(1_500n);
+  });
+
   it("allows at most one concurrent full release", async () => {
     await reserveFunds(prisma, {
       accountId, ...walletScope(), amountCents: 2_000n, referenceId: "reservation-race", description: "reservation",
