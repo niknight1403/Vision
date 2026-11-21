@@ -33,9 +33,20 @@ suite("wallet-to-journal reconciliation (PostgreSQL)", () => {
       ],
     });
 
+    const walletBefore = await prisma.walletAccount.findUniqueOrThrow({ where: { id: wallet.id } });
+    const ledgerBefore = await prisma.walletLedger.findMany({ where: { accountId: wallet.id }, orderBy: { id: "asc" } });
+    const journalBefore = await prisma.journalTransaction.count({ where: { tenantId: tenant.id } });
+
     const result = await reconcileWalletJournal(prisma, {
       tenantId: tenant.id, ownerId: wallet.ownerId, accountId: wallet.id,
     });
+
+    const walletAfter = await prisma.walletAccount.findUniqueOrThrow({ where: { id: wallet.id } });
+    const ledgerAfter = await prisma.walletLedger.findMany({ where: { accountId: wallet.id }, orderBy: { id: "asc" } });
+    const journalAfter = await prisma.journalTransaction.count({ where: { tenantId: tenant.id } });
+    expect(walletAfter).toEqual(walletBefore);
+    expect(ledgerAfter).toEqual(ledgerBefore);
+    expect(journalAfter).toBe(journalBefore);
     expect(result.balanced).toBe(true);
     expect(result.ledgerReservedCents).toBe(4_000n);
     expect(result.journalAvailableCents).toBe(16_000n);
