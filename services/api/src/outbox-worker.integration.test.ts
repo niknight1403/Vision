@@ -122,6 +122,31 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(current.attempts).toBe(1);
   });
 
+  it("reclaims a PROCESSING event whose lease metadata is missing", async () => {
+    const aggregateId = `outbox-missing-lease-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.lease.missing", aggregateId, payload: { test: true },
+    } });
+    await prisma.outboxEvent.update({
+      where: { id: event.id },
+      data: { status: "PROCESSING", lockedBy: "abandoned-worker", leaseUntil: null },
+    });
+
+    const result = await processOneOutboxMessage(
+      prisma,
+      { workerId: "worker-recovery", eventTypes: ["test.lease.missing"] },
+      async (message) => { expect(message.id).toBe(event.id); },
+    );
+
+    expect(result).toBe("PUBLISHED");
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("PUBLISHED");
+    expect(current.lockedBy).toBeNull();
+    expect(current.leaseUntil).toBeNull();
+    expect(current.attempts).toBe(1);
+  });
+
   it("rejects success acknowledgement after its lease expires without a takeover", async () => {
     const aggregateId = `outbox-expired-success-${process.pid}-${Date.now()}`;
     aggregateIds.push(aggregateId);
