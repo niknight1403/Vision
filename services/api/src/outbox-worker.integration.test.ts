@@ -409,6 +409,39 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(retryTiming.secondsUntilAvailable).toBeGreaterThan(0);
     expect(retryTiming.secondsUntilAvailable).toBeLessThanOrEqual(5);
   });
+  it("renews an active lease while a handler runs beyond its original deadline", async () => {
+    const aggregateId = `outbox-lease-renewal-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.lease.renewal",
+      aggregateId,
+      payload: { test: true },
+    } });
+
+    let signalEntered!: () => void;
+    const entered = new Promise<void>((resolve) => { signalEntered = resolve; });
+    const worker = processOneOutboxMessage(
+      prisma,
+      { workerId: "worker-lease-renewal", leaseSeconds: 5, eventTypes: ["test.lease.renewal"] },
+      async () => {
+        signalEntered();
+        await new Promise((resolve) => setTimeout(resolve, 6_500));
+      },
+    );
+
+    await entered;
+    await new Promise((resolve) => setTimeout(resolve, 2_200));
+    const duringHandler = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(duringHandler.status).toBe("PROCESSING");
+    expect(duringHandler.leaseUntil?.getTime()).toBeGreaterThan(Date.now() + 3_000);
+
+    expect(await worker).toBe("PUBLISHED");
+    const completed = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(completed.status).toBe("PUBLISHED");
+    expect(completed.lockedBy).toBeNull();
+    expect(completed.leaseUntil).toBeNull();
+  });
+
   it("moves exhausted messages to dead letter and clears the lease", async () => {
     const aggregateId = `outbox-dead-letter-${process.pid}-${Date.now()}`;
     aggregateIds.push(aggregateId);
