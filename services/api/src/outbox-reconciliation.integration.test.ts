@@ -42,6 +42,50 @@ suite("outbox reconciliation (PostgreSQL)", () => {
     expect(unchanged.status).toBe("PUBLISHED");
     expect(unchanged.publishedAt).not.toBeNull();
   });
+
+  it("applies since and limit deterministically and leaves selected events unchanged", async () => {
+    const createdAt = new Date(Date.now() + 5_000);
+    const fixtures = await prisma.outboxEvent.createManyAndReturn({
+      data: [
+        {
+          eventType: "test.reconciliation.window",
+          aggregateId: `reconciliation-window-a-${process.pid}-${Date.now()}`,
+          payload: { marker: "first" }, status: "PUBLISHED", publishedAt: null, createdAt,
+          availableAt: createdAt,
+        },
+        {
+          eventType: "test.reconciliation.window",
+          aggregateId: `reconciliation-window-b-${process.pid}-${Date.now()}`,
+          payload: { marker: "second" }, status: "PUBLISHED", publishedAt: null, createdAt,
+          availableAt: createdAt,
+        },
+      ],
+    });
+    ids.push(...fixtures.map((item) => item.id));
+    const ordered = [...fixtures].sort((a, b) => a.id.localeCompare(b.id));
+    const before = await prisma.outboxEvent.findMany({
+      where: { id: { in: ids } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+
+    const limited = await reconcileOutbox(prisma, {
+      since: createdAt, limit: 1, now: createdAt,
+    });
+    expect(limited.scanned).toBe(1);
+    expect(limited.findings).toEqual([expect.objectContaining({ code: "PUBLISHED_TIMESTAMP_MISSING", eventId: ordered[0].id })]);
+
+    const complete = await reconcileOutbox(prisma, {
+      since: createdAt, limit: 2, now: createdAt,
+    });
+    expect(complete.scanned).toBe(2);
+    expect(complete.findings.map((finding) => finding.eventId).sort()).toEqual(ordered.map((item) => item.id).sort());
+    const after = await prisma.outboxEvent.findMany({
+      where: { id: { in: ids } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    expect(after).toEqual(before);
+    expect(ordered).toHaveLength(2);
+    expect(JSON.stringify(complete)).not.toContain("first");
+    expect(JSON.stringify(complete)).not.toContain("second");
+  });
 });
 
 if (!enabled) void prisma.$disconnect();

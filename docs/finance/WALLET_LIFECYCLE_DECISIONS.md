@@ -229,3 +229,12 @@ Adds a PostgreSQL integration proof for the release side of the caller-owned tra
 - The test uses explicitly named TEST-RELEASE-* journal account codes only; these are not production accounting mappings.
 
 This validates technical atomicity for a composed release command. It does not wire journal posting into the existing production releaseFunds wrapper, approve financial semantics, or enable provider, payout, refund, settlement, or payment execution. A future production command still requires finance-owner approval of the accounting treatment and an authenticated application-level authorization boundary.
+
+
+## Sprint 3.18 — Read-only reconciliation guarantees
+
+The wallet-to-journal reconciliation integration test now snapshots the wallet row, reservation ledger rows, and journal transaction count before invoking `reconcileWalletJournal`, then proves those records are unchanged after the report is produced. The report remains tenant/owner/account scoped and diagnostic only; the deliberately induced drift fixture is a separate explicit test mutation, not a reconciliation side effect.
+
+The outbox reconciliation integration test now exercises the bounded `since` + `limit` query against controlled PostgreSQL fixtures. It verifies stable ordering for equal timestamps, confirms the exact selected event is reported, and compares the persisted rows before and after both scans. The report continues to expose metadata only and never returns event payloads.
+
+These tests do not authorize journal posting, wallet repair, outbox lease reclamation, replay, or any external financial action.
