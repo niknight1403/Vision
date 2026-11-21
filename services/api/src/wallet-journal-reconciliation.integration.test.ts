@@ -63,10 +63,35 @@ suite("wallet-to-journal reconciliation (PostgreSQL)", () => {
     expect(drift.differences.map((item) => item.field)).toContain("journalReservedVsWalletReserved");
   });
 
-  it("does not reveal a wallet through a mismatched tenant or owner", async () => {
-    await expect(reconcileWalletJournal(prisma, {
-      tenantId: "other-tenant", ownerId: "other-owner", accountId: "unknown-wallet",
-    })).rejects.toThrow("WALLET_NOT_FOUND");
+  it("does not reveal an existing wallet when either tenant or owner scope mismatches", async () => {
+    const tenant = await prisma.tenant.create({ data: { name: "Wallet scope isolation test" } });
+    const wallet = await prisma.walletAccount.create({
+      data: {
+        tenantId: tenant.id,
+        ownerId: `wallet-scope-owner-${process.pid}-${Date.now()}`,
+        currency: "EUR",
+        balanceCents: 1_000n,
+        reservedCents: 0n,
+      },
+    });
+
+    try {
+      // Keep the real wallet ID and vary exactly one authorization dimension at a time.
+      await expect(reconcileWalletJournal(prisma, {
+        tenantId: "different-tenant",
+        ownerId: wallet.ownerId,
+        accountId: wallet.id,
+      })).rejects.toThrow("WALLET_NOT_FOUND");
+
+      await expect(reconcileWalletJournal(prisma, {
+        tenantId: tenant.id,
+        ownerId: "different-owner",
+        accountId: wallet.id,
+      })).rejects.toThrow("WALLET_NOT_FOUND");
+    } finally {
+      await prisma.walletAccount.delete({ where: { id: wallet.id } });
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+    }
   });
 });
 
