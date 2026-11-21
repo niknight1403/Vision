@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { postJournalTransactionInTransaction } from "./journal-service.js";
 import { enqueueOutboxEvent } from "./outbox-service.js";
+import { runSerializableTransaction } from "./transaction-retry.js";
 import { releaseFunds, releaseFundsInTransaction, reserveFunds, reserveFundsInTransaction } from "./wallet-service.js";
 
 const databaseEnabled = Boolean(process.env.DATABASE_URL);
@@ -91,7 +92,7 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
       referenceId, correlationId: referenceId, description: "transaction composition test",
     };
 
-    await expect(prisma.$transaction(async (tx) => {
+    await expect(runSerializableTransaction(prisma, async (tx) => {
       await reserveFundsInTransaction(tx, {
         ...reserveInput, referenceId: "wallet-journal-atomic-rollback",
       });
@@ -110,14 +111,14 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
         payload: { journalTransactionId: journal.id },
       });
       throw new Error("FORCE_COMPOSED_TRANSACTION_ROLLBACK");
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })).rejects.toThrow("FORCE_COMPOSED_TRANSACTION_ROLLBACK");
+    }, { baseDelayMs: 0 })).rejects.toThrow("FORCE_COMPOSED_TRANSACTION_ROLLBACK");
 
     expect((await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } })).reservedCents).toBe(0n);
     expect(await prisma.walletLedger.count({ where: { referenceId: "wallet-journal-atomic-rollback" } })).toBe(0);
     expect(await prisma.journalTransaction.count({ where: { tenantId, referenceId: "wallet-journal-atomic-rollback" } })).toBe(0);
     expect(await prisma.outboxEvent.count({ where: { correlationId: "wallet-journal-atomic-rollback" } })).toBe(0);
 
-    await prisma.$transaction(async (tx) => {
+    await runSerializableTransaction(prisma, async (tx) => {
       await reserveFundsInTransaction(tx, reserveInput);
       const journal = await postJournalTransactionInTransaction(tx, {
         tenantId, referenceId: "wallet-journal-atomic-commit", currency: "EUR",
@@ -133,7 +134,7 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
         correlationId: "wallet-journal-atomic-commit",
         payload: { journalTransactionId: journal.id },
       });
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }, { baseDelayMs: 0 });
 
     expect((await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } })).reservedCents).toBe(1_000n);
     expect(await prisma.walletLedger.count({ where: { referenceId } })).toBe(1);
