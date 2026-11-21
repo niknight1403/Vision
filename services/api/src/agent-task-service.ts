@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { Prisma, PrismaClient } from "@prisma/client";
+import { enqueueOutboxEvent } from "./outbox-service.js";
 
-type Db = PrismaClient | Prisma.TransactionClient;
 type JsonObject = Prisma.InputJsonObject;
 
 export class PermanentTaskError extends Error {
@@ -75,9 +75,13 @@ function matchIdempotentTask(
   return existing;
 }
 
-async function emit(db: Db, eventType: string, taskId: string, correlationId: string | undefined, payload: JsonObject) {
-  await db.outboxEvent.create({
-    data: { eventType, aggregateId: taskId, correlationId, payload, schemaVersion: 1 },
+async function emit(tx: Prisma.TransactionClient, eventType: string, taskId: string, correlationId: string | undefined, payload: JsonObject) {
+  await enqueueOutboxEvent(tx, {
+    eventType,
+    aggregateId: taskId,
+    correlationId,
+    payload,
+    schemaVersion: 1,
   });
 }
 

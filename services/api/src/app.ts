@@ -7,6 +7,7 @@ import { config } from "./config.js";
 import { authenticateBearerToken, requireTenantAdmin, resolveTenantContext, type AuthenticatedPrincipal } from "./auth-service.js";
 import { loginWithPassword, revokeRefreshToken, rotateRefreshToken } from "./auth-session-service.js";
 import { listDealCandidates } from "./deal-candidate-service.js";
+import { enqueueOutboxEvent } from "./outbox-service.js";
 
 export interface ServerDependencies {
   prisma: PrismaClient;
@@ -266,8 +267,13 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
         const created = await tx.agentTask.create({ data: { ownerId: principal.userId, tenantId: tenant.tenantId,
           taskType: "HIDDEN_TREASURE_ANALYSIS", status: "QUEUED", input, inputHash,
           correlationId, idempotencyKey, maxAttempts: 3 } });
-        await tx.outboxEvent.create({ data: { eventType: "hidden_treasure.analysis.requested",
-          aggregateId: created.id, correlationId, payload: { taskId: created.id, taskType: created.taskType } } });
+        await enqueueOutboxEvent(tx, {
+          eventType: "hidden_treasure.analysis.requested",
+          aggregateId: created.id,
+          correlationId,
+          schemaVersion: 1,
+          payload: { taskId: created.id, taskType: created.taskType },
+        });
         return created;
       });
       return reply.code(202).send({ taskId: task.id, status: task.status, correlationId,
