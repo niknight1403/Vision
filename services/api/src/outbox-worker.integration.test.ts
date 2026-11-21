@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { claimOutboxMessage, processOneOutboxMessage, processOneOutboxMessageWithInbox, runOutboxWorker } from "./outbox-worker.js";
 
@@ -862,6 +862,244 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(rows.filter((event) => event.status === "PUBLISHED").every((event) =>
       event.lockedBy === null && event.leaseUntil === null
     )).toBe(true);
+  }, 15_000);
+
+
+  it("wakes an idle polling worker promptly on shutdown without claiming unrelated work", async () => {
+    const aggregateId = `outbox-idle-abort-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const unrelated = await prisma.outboxEvent.create({
+      data: {
+        eventType: "test.idle-abort.unrelated",
+        aggregateId,
+        payload: { test: true },
+      },
+    });
+    const controller = new AbortController();
+    let signalIdleWaitStarted!: () => void;
+    const idleWaitStarted = new Promise<void>((resolve) => { signalIdleWaitStarted = resolve; });
+    const originalSetTimeout = globalThis.setTimeout;
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((handler, timeout, ...args) => {
+      const timer = originalSetTimeout(handler, timeout, ...args);
+      if (timeout === 5_000 && typeof handler === "function") signalIdleWaitStarted();
+      return timer;
+    });
+    const runner = runOutboxWorker(
+      prisma,
+      {
+        workerId: "worker-idle-abort",
+        leaseSeconds: 30,
+        eventTypes: ["test.idle-abort.target"],
+      },
+      async () => {
+        throw new Error("worker must not claim an unrelated event");
+      },
+      { signal: controller.signal, pollIntervalMs: 5_000 },
+    );
+
+    try {
+      // Synchronize with the worker's actual idle timer, not an arbitrary delay.
+      await idleWaitStarted;
+      const startedAt = Date.now();
+      controller.abort();
+      await expect(runner).resolves.toEqual({ published: 0, retried: 0, deadLettered: 0 });
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    } finally {
+      controller.abort();
+      timeoutSpy.mockRestore();
+      await runner.catch(() => undefined);
+    }
+
+    const row = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: unrelated.id } });
+    expect(row.status).toBe("PENDING");
+    expect(row.attempts).toBe(0);
+    expect(row.lockedBy).toBeNull();
+    expect(row.leaseUntil).toBeNull();
+  }, 15_000);
+
+
+  it("finishes a message whose database claim returned after shutdown was requested", async () => {
+    const aggregateId = `outbox-abort-during-claim-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({
+      data: {
+        eventType: "test.abort-during-claim",
+        aggregateId,
+        payload: { test: true },
+      },
+    });
+
+    const controller = new AbortController();
+    let signalClaimReturned!: () => void;
+    let releaseClaim!: () => void;
+    const claimReturned = new Promise<void>((resolve) => { signalClaimReturned = resolve; });
+    const claimGate = new Promise<void>((resolve) => { releaseClaim = resolve; });
+    let interceptedClaim = false;
+    const delayedPrisma = new Proxy(prisma, {
+      get(target, property) {
+        if (property === "$queryRaw") {
+          return async (...args: Parameters<PrismaClient["$queryRaw"]>) => {
+            const rows = await target.$queryRaw(...args);
+            if (!interceptedClaim) {
+              interceptedClaim = true;
+              signalClaimReturned();
+              await claimGate;
+            }
+            return rows;
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as PrismaClient;
+
+    let handlerCalls = 0;
+    const runner = runOutboxWorker(
+      delayedPrisma,
+      {
+        workerId: "worker-abort-during-claim",
+        leaseSeconds: 30,
+        eventTypes: ["test.abort-during-claim"],
+      },
+      async () => { handlerCalls += 1; },
+      { signal: controller.signal, pollIntervalMs: 50 },
+    );
+
+    try {
+      // The SQL claim has committed, but its result has not yet reached the worker.
+      await claimReturned;
+      controller.abort();
+      expect(handlerCalls).toBe(0);
+      releaseClaim();
+      await expect(runner).resolves.toEqual({ published: 1, retried: 0, deadLettered: 0 });
+    } finally {
+      controller.abort();
+      releaseClaim();
+      await runner.catch(() => undefined);
+    }
+
+    expect(interceptedClaim).toBe(true);
+    expect(handlerCalls).toBe(1);
+    const row = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(row.status).toBe("PUBLISHED");
+    expect(row.attempts).toBe(1);
+    expect(row.lockedBy).toBeNull();
+    expect(row.leaseUntil).toBeNull();
+  }, 15_000);
+
+
+  it("exits cleanly when shutdown arrives during a claim that finds no matching event", async () => {
+    const aggregateId = `outbox-abort-empty-claim-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const unrelated = await prisma.outboxEvent.create({
+      data: {
+        eventType: "test.abort-empty-claim.unrelated",
+        aggregateId,
+        payload: { test: true },
+      },
+    });
+
+    const controller = new AbortController();
+    let signalClaimReturned!: () => void;
+    let releaseClaim!: () => void;
+    const claimReturned = new Promise<void>((resolve) => { signalClaimReturned = resolve; });
+    const claimGate = new Promise<void>((resolve) => { releaseClaim = resolve; });
+    let interceptedClaim = false;
+    const delayedPrisma = new Proxy(prisma, {
+      get(target, property) {
+        if (property === "$queryRaw") {
+          return async (...args: Parameters<PrismaClient["$queryRaw"]>) => {
+            const rows = await target.$queryRaw(...args);
+            if (!interceptedClaim) {
+              interceptedClaim = true;
+              expect(rows).toHaveLength(0);
+              signalClaimReturned();
+              await claimGate;
+            }
+            return rows;
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as PrismaClient;
+
+    let handlerCalls = 0;
+    const runner = runOutboxWorker(
+      delayedPrisma,
+      {
+        workerId: "worker-abort-empty-claim",
+        leaseSeconds: 30,
+        eventTypes: ["test.abort-empty-claim.target"],
+      },
+      async () => { handlerCalls += 1; },
+      { signal: controller.signal, pollIntervalMs: 5_000 },
+    );
+
+    try {
+      // The database claim has completed with no matching row, but its result
+      // has not yet reached the worker loop.
+      await claimReturned;
+      controller.abort();
+      releaseClaim();
+      await expect(runner).resolves.toEqual({ published: 0, retried: 0, deadLettered: 0 });
+    } finally {
+      controller.abort();
+      releaseClaim();
+      await runner.catch(() => undefined);
+    }
+
+    expect(interceptedClaim).toBe(true);
+    expect(handlerCalls).toBe(0);
+    const row = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: unrelated.id } });
+    expect(row.status).toBe("PENDING");
+    expect(row.attempts).toBe(0);
+    expect(row.lockedBy).toBeNull();
+    expect(row.leaseUntil).toBeNull();
+  }, 15_000);
+
+
+  it("does not claim work when shutdown was requested before the worker starts", async () => {
+    const aggregateId = `outbox-pre-aborted-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({
+      data: {
+        eventType: "test.pre-aborted-worker",
+        aggregateId,
+        payload: { test: true },
+      },
+    });
+
+    const controller = new AbortController();
+    controller.abort();
+    const claimSpy = vi.spyOn(prisma, "$queryRaw");
+    const handler = vi.fn(async () => {
+      throw new Error("a pre-aborted worker must not invoke its handler");
+    });
+
+    try {
+      await expect(runOutboxWorker(
+        prisma,
+        {
+          workerId: "worker-pre-aborted",
+          leaseSeconds: 30,
+          eventTypes: ["test.pre-aborted-worker"],
+        },
+        handler,
+        { signal: controller.signal, pollIntervalMs: 50 },
+      )).resolves.toEqual({ published: 0, retried: 0, deadLettered: 0 });
+
+      expect(claimSpy).not.toHaveBeenCalled();
+      expect(handler).not.toHaveBeenCalled();
+    } finally {
+      claimSpy.mockRestore();
+    }
+
+    const row = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(row.status).toBe("PENDING");
+    expect(row.attempts).toBe(0);
+    expect(row.lockedBy).toBeNull();
+    expect(row.leaseUntil).toBeNull();
   }, 15_000);
 
 });
