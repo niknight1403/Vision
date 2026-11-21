@@ -13,10 +13,10 @@ function event(overrides: Partial<ReconciliationEvent> = {}): ReconciliationEven
 }
 
 describe("read-only outbox reconciliation", () => {
-  it("reports missing required consumer receipts without requiring unrelated consumers", () => {
+  it("reports the single configured consumer receipt as missing", () => {
     const report = reconcileOutboxEvents(
-      [event({ consumerReceipts: [{ consumerName: "audit", processedAt: now }] })],
-      { "wallet.reservation.created": ["audit", "ledger-projection"] },
+      [event()],
+      { "wallet.reservation.created": ["ledger-projection"] },
       { now },
     );
     expect(report.scanned).toBe(1);
@@ -26,6 +26,21 @@ describe("read-only outbox reconciliation", () => {
       eventId: "event-1", eventType: "wallet.reservation.created",
       consumerName: "ledger-projection",
     }]);
+  });
+
+  it("fails closed when configuration promises unsupported multi-consumer fan-out", () => {
+    expect(() => reconcileOutboxEvents(
+      [event()],
+      { "wallet.reservation.created": ["wallet-projection", "audit-projection"] },
+      { now },
+    )).toThrow("OUTBOX_MULTI_CONSUMER_FANOUT_UNSUPPORTED");
+  });
+
+  it("rejects malformed expected-consumer configuration", () => {
+    expect(() => reconcileOutboxEvents([event()], { " ": ["consumer"] }, { now }))
+      .toThrow("INVALID_EXPECTED_CONSUMERS");
+    expect(() => reconcileOutboxEvents([event()], { "wallet.reservation.created": [" "] }, { now }))
+      .toThrow("INVALID_EXPECTED_CONSUMERS");
   });
 
   it("detects incomplete and expired processing leases and unexpected locks", () => {
