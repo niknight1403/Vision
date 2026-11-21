@@ -55,6 +55,7 @@ model User {
   updatedAt    DateTime @updatedAt
   refreshSessions RefreshSession[]
   memberships     TenantMembership[]
+  dealReviews     DealReview[] @relation("DealReviewReviewer")
 }
 
 model Tenant {
@@ -275,6 +276,7 @@ model DealReview {
   updatedAt      DateTime            @updatedAt
   tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   candidate      DealCandidate       @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  reviewer       User                @relation("DealReviewReviewer", fields: [reviewerUserId], references: [id], onDelete: Restrict)
 
   @@unique([tenantId, candidateId])
   @@index([tenantId, decision, reviewedAt])
