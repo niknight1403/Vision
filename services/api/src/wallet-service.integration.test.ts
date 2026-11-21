@@ -114,7 +114,7 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     }, { baseDelayMs: 0 })).rejects.toThrow("FORCE_COMPOSED_TRANSACTION_ROLLBACK");
 
     expect((await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } })).reservedCents).toBe(0n);
-    expect(await prisma.walletLedger.count({ where: { accountId_referenceId: { accountId, referenceId: "wallet-journal-atomic-rollback" } } })).toBe(0);
+    expect(await prisma.walletLedger.count({ where: { accountId, referenceId: "wallet-journal-atomic-rollback" } })).toBe(0);
     expect(await prisma.journalTransaction.count({ where: { tenantId, referenceId: "wallet-journal-atomic-rollback" } })).toBe(0);
     expect(await prisma.outboxEvent.count({ where: { correlationId: "wallet-journal-atomic-rollback" } })).toBe(0);
 
