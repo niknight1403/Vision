@@ -75,3 +75,30 @@ Die Code-Suche fand keine belastbare produktive Registrierung über `OutboxConsu
 - Für Task-Lifecycle-Events prüfen, ob sie überhaupt Fan-out benötigen; viele sind Audit-/Telemetry-Signale und können ohne Consumer bleiben.
 - `hidden_treasure.analysis.requested` und AgentTask-Queueing nicht doppelt auslösen: vorhandener Worker pollt AgentTask-Status direkt.
 - Erst einen nichtfinanziellen, explizit aktivierten Consumer mit DB-only Effekt wählen und per Shadow-Mode testen.
+
+
+## Runtime- und Startpfad-Audit
+
+Die Betriebsprüfung auf demselben Finance-Branch bestätigt eine zusätzliche Lücke:
+
+| Komponente | Code vorhanden | Startpfad im API-Paket | Laufender Betrieb belegt |
+|---|---:|---|---:|
+| API-Server (`src/server.ts`) | Ja | `npm start` / `npm run dev` | Nur als Serverprozess, nicht als Worker-Beleg |
+| Agent-Task-Worker (`src/agent-task-worker.ts`) | Ja | `npm run worker` | Nein, Deployment/Prozess nicht belegt |
+| Agent-Orchestrator (`src/agent-orchestrator.ts`) | Ja | Kein eigenes Paket-Script in `services/api/package.json` | Nein |
+| Outbox-Worker (`src/outbox-worker.ts`) | Ja, Bibliotheksfunktionen | Kein eigenes Paket-Script/CLI-Einstieg in `services/api/package.json` | Nein |
+| Outbox-Consumer-Registry | Ja, Dispatch-Abstraktion | Keine gefundene Registry-Instanzierung oder fachliche Registrierung | Nein |
+
+Der API-Server in `src/server.ts` erstellt Prisma und Fastify und startet ausschließlich `buildServer(...)` mit `app.listen`. Er startet weder Outbox-Worker noch Agent-Orchestrator.
+
+Das API-Paket definiert `worker` als Startscript für `agent-task-worker.ts`, aber kein entsprechendes `outbox-worker`-Script. Der Outbox-Worker stellt derzeit Funktionen zum Claim, Ack, Retry und Inbox-Processing bereit; ein dauerhaft laufender Polling-Loop und ein produktiver Handler-Registry-Bootstrap sind im geprüften Startpfad nicht nachgewiesen.
+
+Die API-README grenzt das ausdrücklich ab: Der lokale Produkt-Demo-Start aktiviert weder den separaten Outbox-Worker noch den Agent-Orchestrator; der aktuelle API-Server startet nur Health-/Operations-Routen. Das ist eine Dokumentationsaussage zum vorgesehenen Startpfad und kein Deployment-Nachweis für andere Umgebungen.
+
+### Betriebsrisiko und sichere Reihenfolge
+
+1. Keine Events als „zugestellt“ oder „verarbeitet“ ausweisen, nur weil sie atomar in `OutboxEvent` gespeichert sind.
+2. Vor einem Outbox-Worker einen expliziten Prozess-Einstieg mit Shutdown, Poll-Backoff, Health/Readiness, Lease-Konfiguration und eindeutiger Worker-ID definieren.
+3. Vor dem Start eine allowlist-basierte Consumer-Konfiguration laden und bei unbekanntem Event/Schema fail-closed bleiben.
+4. Zunächst einen reinen DB-Projektions-Consumer in isolierter Umgebung integrieren; externe Effekte und Finanzbuchungen bleiben ausgeschlossen.
+5. Laufzeitbelege getrennt erfassen: Prozess/Deployment, Queue-Lag, Claim/Lease, Retry/DLQ, Consumer-Receipt und fachliche Wirkung.
