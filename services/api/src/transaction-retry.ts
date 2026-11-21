@@ -8,11 +8,19 @@ export type SerializableRetryOptions = {
 };
 
 function isSerializationConflict(error: unknown): boolean {
-  if (error instanceof Prisma.PrismaClientKnownRequestError) return error.code === "P2034";
-  // Preserve retry behavior across Prisma client/runtime package boundaries,
-  // where instanceof may not match even though the documented error code does.
-  return typeof error === "object" && error !== null &&
-    "code" in error && (error as { code?: unknown }).code === "P2034";
+  if (typeof error !== "object" || error === null) return false;
+
+  const candidate = error as {
+    code?: unknown;
+    meta?: { code?: unknown; message?: unknown };
+  };
+
+  // Prisma reports ORM-level serialization/deadlock conflicts as P2034.
+  if (candidate.code === "P2034") return true;
+
+  // PostgreSQL SQLSTATE 40001 raised by parameterized $queryRaw calls is
+  // wrapped by Prisma as P2010 with the database code in meta.code.
+  return candidate.code === "P2010" && candidate.meta?.code === "40001";
 }
 
 /**
