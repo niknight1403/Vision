@@ -102,4 +102,24 @@ describe("read-only outbox reconciliation", () => {
       ["event-b", "REQUIRED_RECEIPT_MISSING", "consumer-z"],
     ]);
   });
+  it("deduplicates repeated required-consumer configuration", () => {
+    const report = reconcileOutboxEvents(
+      [event({ publishedAt: null })],
+      { "wallet.reservation.created": ["ledger-projection", "ledger-projection", "audit"] },
+      { now },
+    );
+
+    expect(report.findings.filter((finding) => finding.code === "REQUIRED_RECEIPT_MISSING"))
+      .toEqual([
+        {
+          code: "REQUIRED_RECEIPT_MISSING", severity: "CRITICAL",
+          eventId: "event-1", eventType: "wallet.reservation.created", consumerName: "audit",
+        },
+        {
+          code: "REQUIRED_RECEIPT_MISSING", severity: "CRITICAL",
+          eventId: "event-1", eventType: "wallet.reservation.created", consumerName: "ledger-projection",
+        },
+      ]);
+  });
+
 });
