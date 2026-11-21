@@ -86,3 +86,9 @@ The current client expects an ADMIN account for enqueueing. A VIEWER or OPERATOR
 ## Release readiness
 
 A green CI run verifies code, Prisma migrations, API tests, Python tests, dependency audit, the Expo Android JavaScript export, and the worker bearer-token handshake: the `worker-auth` job boots the private worker with the repository secret `VISION_WORKER_TOKEN`, proves `/health` answers, and proves `/v1/analyze` returns 401 without a token, 401 with a wrong token, and 200 with the configured secret. The job fails if the secret is missing or shorter than 32 characters, so a missing deployment secret breaks the pipeline instead of silently shipping an unauthenticated worker. It does not create a signed APK/AAB, provision production secrets, deploy the API/database/worker, configure an approved marketplace sold-data provider, or publish a production release. Those remain separate deployment and distribution gates.
+
+## Sprint-7-Persistenz-Gate (2026-11-21)
+
+Die synchrone Vision-Inspection ist ein Analysebefund und kein Authentizitätsnachweis. `purchaseAuthorized` und `authenticityVerified` bleiben `false`; ein Modellscore oder Textbefund darf keine Kauf-, Listing- oder Settlement-Entscheidung autorisieren.
+
+Eine neue Prisma-Audit-Tabelle wird in diesem Sprint bewusst **nicht** halb implementiert: Es fehlt ein verifizierter Produktions-Migrationslauf, eine abgestimmte Datenminimierungs-/Aufbewahrungsrichtlinie und eine erreichbare PostgreSQL-Integrationsumgebung. Bis diese Nachweise vorliegen, bleibt die Response transaktionslos und die bestehende durable Task-/Outbox-Auditspur ist der einzige zulässige Persistenzpfad. Der exakte Gate-Blocker ist daher: *Migration, Retention, Zugriffsschutz und DB-Integration müssen gemeinsam reviewed und gegen PostgreSQL getestet werden, bevor Vision-Befunde dauerhaft als Auditobjekte gespeichert werden.*
