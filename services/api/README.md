@@ -1,6 +1,6 @@
 # API service boundary
 
-The API is intentionally not wired to live marketplace providers yet.
+The API exposes a strictly read-only, ADMIN-triggered provider scan. It remains in PAPER mode; no purchase, bid, listing, payment, or seller-contact operation is exposed.
 
 The repository now contains a disabled, fail-closed testnet safety boundary in
 `src/testnet-execution.ts`: approval snapshots, order-state transitions,
@@ -64,7 +64,7 @@ This is transport hardening, not a marketplace integration. No provider host is 
 
 The loader rejects partial configuration, non-HTTPS endpoints, host mismatches, wildcard hosts, URL credentials/query/fragment, and malformed provider IDs. When no provider variables exist, the provider is returned as disabled. Never serialize the resulting config object, log it, expose it in API responses, or pass it to the mobile application because it may contain a credential. Supply secrets through the deployment platform's secret manager/environment injection; do not commit real values or place them in `EXPO_PUBLIC_*` variables.
 
-This remains configuration plumbing only: no marketplace provider has been selected or connected, and no network request is made during configuration loading. A real adapter must be implemented against a named provider's official read API, validate provider responses, and declare only capabilities actually supported by that API.
+Configuration loading makes no network request. The optional eBay Browse adapter is implemented separately against the official Buy Browse search API and is registered only when both server-side OAuth credentials are present. It supports active-listing search only; it does not provide completed-sale comparables or verify authenticity. The generic catalog adapter remains a contract adapter, not proof of a marketplace connection.
 
 
 ### Generic read-only Catalog REST adapter
@@ -76,7 +76,7 @@ A generic contract adapter is now available in `src/providers/catalog-rest-adapt
 
 Product payloads are validated and normalized; product links must use HTTPS. The adapter advertises only `PRODUCT_SEARCH`. It has no purchase, listing, payment, or order mutation methods. `bootstrap.ts` registers it only when the `PROVIDER_CATALOG_DEMO_*` server environment is configured.
 
-This is a generic integration contract and test fixture, not a connection to eBay, Amazon, Shopify, or another real marketplace. No provider endpoint or credentials are supplied by default. The registry is not yet exposed through an HTTP route because authenticated sessions and provider-specific authorization are not implemented. Do not enable this adapter against a real service until its official API contract, terms, credentials, and response schema have been reviewed.
+This is a generic integration contract and test fixture, not a connection to eBay, Amazon, Shopify, or another real marketplace. No provider endpoint or credentials are supplied by default. The authenticated `GET /v1/providers` route lists configured adapters and capabilities without exposing credentials. `POST /v1/deals/scan` is ADMIN-only and runs one explicit read-only scan. Do not configure this generic adapter against a real service until its official API contract, terms, credentials, and response schema have been reviewed.
 
 
 ### Deal analysis and risk screening
@@ -88,7 +88,7 @@ The scanner currently accepts EUR only; it rejects other currencies rather than 
 
 The same package also exports `scanProviderDeals(provider, request, signal?)`. This composes a provider's declared `PRODUCT_SEARCH` capability with the analysis function: it bounds query/limit, requires EUR until conversion is implemented, propagates abort signals, rejects over-sized provider responses, and analyzes only records actually returned by that provider. An empty provider response stays empty; no sample products are substituted.
 
-This pipeline is currently a reusable core function, not an HTTP endpoint. The API deliberately does not expose it publicly until authenticated sessions, authorization, and persisted audit controls are in place.
+The API exposes this pipeline through the ADMIN-only `POST /v1/deals/scan` route. It accepts an explicit resale-price estimate and cost/risk profile from the administrator, invokes only a server-configured provider, persists only products actually returned by that provider, and returns counts. It labels profit as an estimate, not realized profit. It does not perform completed-sale valuation, currency conversion, automatic discovery scheduling, or purchase execution.
 
 
 ### Persisted deal review queue
@@ -104,7 +104,7 @@ Migration `20261117014300_deal_candidates` adds this table and runs after `20261
 
 `src/deal-scan-service.ts` now connects the configured provider registry to the shared trading-core scanner and the persistent review queue. `runAndPersistDealScan` resolves only a registered provider with `PRODUCT_SEARCH`, analyzes the provider's actual read-only results, checks cancellation before persistence, and stores the resulting candidates. Its return value contains counts only, not provider credentials or raw payloads.
 
-This is an internal service function, not a public route or an automatically scheduled job. It must be called only by a future authenticated, authorized operator workflow. The API workspace declares the shared trading-core dependency; its TypeScript build emits the shared source under the API build output, so the production start script targets `dist/services/api/src/server.js`. The lockfile was updated with the workspace dependency. No install, typecheck, test, migration, or deployment has been run as part of this source change.
+The service is called by the authenticated ADMIN scan route; it is not an automatically scheduled job. The API workspace declares the shared trading-core dependency; its TypeScript build emits the shared source under the API build output, so the production start script targets `dist/services/api/src/server.js`. The lockfile was updated with the workspace dependency. No install, typecheck, test, migration, or deployment has been run as part of this source change.
 
 
 ### Authentication and database-backed RBAC primitive
@@ -138,9 +138,11 @@ These are internal service primitives only. No login, refresh, logout, or deal-r
 | `POST /v1/auth/login` | public | Issues an HS256 access token (15 min) plus a rotating refresh token (30 days) |
 | `POST /v1/auth/refresh` | refresh token | One-time rotation; reuse of a rotated token returns 401 |
 | `POST /v1/auth/logout` | refresh token | Revokes the presented refresh session, 204 |
+| `GET /v1/providers` | any authenticated role | Configured read-only providers and capabilities; no secrets |
+| `POST /v1/deals/scan` | ADMIN only | Explicit provider search + estimate/risk calculation + persisted candidates; EUR only; 30-second timeout |
 | `GET /v1/deals` | any authenticated role | Review queue with `reviewStatus`, `riskPassed` and `limit` (1..100) filters |
 | `POST /v1/deals/:dealId/review` | ADMIN only | `APPROVED`, `REJECTED` or `ARCHIVED`; 422 for simulated or risk-failing approval, 409 on a concurrent or repeated decision |
 
 Access control is enforced per request: `authenticateBearerToken` verifies the signature and then reloads the user's role and `disabledAt` from PostgreSQL, so a role change or a disabled account takes effect without waiting for the token to expire. Cent amounts are serialized as strings to keep them JSON-safe.
 
-The routes expose review decisions only. There is still no purchase, reservation, listing-publication or payout endpoint, and approving a candidate never reserves funds or contacts a provider. `AUTH_SIGNING_SECRET` (at least 32 bytes) must come from the deployment environment; without it the auth routes fail closed with 503. Login has no additional rate limiting beyond the constant-time dummy-hash comparison, so a public deployment needs a reverse-proxy or gateway throttle.
+The scan route only performs provider search. Resale price, shipping, fee, packaging, reserve and risk assumptions are administrator-supplied inputs, not independently verified market valuations. Active eBay asking prices are not sold-price comparables. There is no purchase, reservation, listing-publication or payout endpoint, and approving a candidate never reserves funds or contacts a provider. `AUTH_SIGNING_SECRET` (at least 32 bytes) must come from the deployment environment; without it the auth routes fail closed with 503. Login has no additional rate limiting beyond the constant-time dummy-hash comparison, so a public deployment needs a reverse-proxy or gateway throttle.

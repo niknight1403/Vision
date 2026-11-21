@@ -3,6 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "./app.js";
 import { hashPassword } from "./auth-session-service.js";
+import { ProviderRegistry } from "./providers/registry.js";
 
 const databaseEnabled = Boolean(process.env.DATABASE_URL);
 const suite = describe.skipIf(!databaseEnabled);
@@ -64,7 +65,25 @@ async function login(email: string) {
 suite("authenticated deal review routes (RBAC)", () => {
   beforeAll(async () => {
     await prisma.$connect();
-    app = await buildServer({ prisma, authSigningSecret: SIGNING_SECRET });
+    const providers = new ProviderRegistry();
+    providers.register({
+      providerId: "test-market",
+      displayName: "Integration test marketplace",
+      capabilities: ["PRODUCT_SEARCH"],
+      simulated: false,
+      healthCheck: async () => ({ status: "HEALTHY", checkedAt: new Date().toISOString() }),
+      searchProducts: async ({ query, limit, currency }) => [{
+        providerId: "test-market",
+        externalId: "scan-" + query.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+        title: "Live provider result " + query,
+        url: "https://market.example.test/item/scan",
+        currency,
+        priceMinor: 5_000,
+        observedAt: new Date().toISOString(),
+        simulated: false,
+      }].slice(0, limit),
+    });
+    app = await buildServer({ prisma, authSigningSecret: SIGNING_SECRET, providers });
     await app.ready();
   });
 
@@ -87,6 +106,100 @@ suite("authenticated deal review routes (RBAC)", () => {
   afterAll(async () => {
     await app?.close();
     await prisma.$disconnect();
+  });
+
+
+  it("runs a real provider adapter only for ADMIN and persists its returned product", async () => {
+    const viewer = await login(viewerEmail);
+    const payload = {
+      providerId: "test-market",
+      query: "camera",
+      limit: 5,
+      currency: "EUR",
+      costs: {
+        inboundShippingCents: "500",
+        outboundShippingCents: "500",
+        marketplaceFeeCents: "500",
+        paymentFeeCents: "100",
+        packagingCents: "100",
+        riskReserveCents: "100",
+      },
+      context: {
+        resalePriceCents: "12000",
+        openTrades: 0,
+        dailyLossCents: "0",
+        riskLimits: {
+          maxTradeCents: "20000",
+          maxOpenTrades: 5,
+          maxDailyLossCents: "50000",
+          minProfitCents: "1000",
+          minRoiBasisPoints: "1000",
+        },
+      },
+    };
+    const forbidden = await app.inject({
+      method: "POST", url: "/v1/deals/scan",
+      headers: { authorization: "Bearer " + viewer.accessToken }, payload,
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const admin = await login(adminEmail);
+    const response = await app.inject({
+      method: "POST", url: "/v1/deals/scan",
+      headers: { authorization: "Bearer " + admin.accessToken }, payload,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      providerId: "test-market",
+      scannedCount: 1,
+      persistedCount: 1,
+      simulatedCount: 0,
+      purchaseAuthorized: false,
+      profitMeaning: "ESTIMATE_NOT_REALIZED",
+    });
+    const saved = await prisma.dealCandidate.findFirstOrThrow({
+      where: { providerId: "test-market", externalId: "scan-camera" },
+    });
+    createdDealIds.push(saved.id);
+    expect(saved.title).toBe("Live provider result camera");
+    expect(saved.simulated).toBe(false);
+    expect(saved.expectedProfitCents).toBe(5_200n);
+  });
+
+  it("does not run a scan when provider credentials are not configured", async () => {
+    const admin = await login(adminEmail);
+    const response = await app.inject({
+      method: "POST", url: "/v1/deals/scan",
+      headers: { authorization: "Bearer " + admin.accessToken },
+      payload: {
+        providerId: "missing-market",
+        query: "camera",
+        limit: 5,
+        currency: "EUR",
+        costs: {
+          inboundShippingCents: "500",
+          outboundShippingCents: "500",
+          marketplaceFeeCents: "500",
+          paymentFeeCents: "100",
+          packagingCents: "100",
+          riskReserveCents: "100",
+        },
+        context: {
+          resalePriceCents: "12000",
+          openTrades: 0,
+          dailyLossCents: "0",
+          riskLimits: {
+            maxTradeCents: "20000",
+            maxOpenTrades: 5,
+            maxDailyLossCents: "50000",
+            minProfitCents: "1000",
+            minRoiBasisPoints: "1000",
+          },
+        },
+      },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "DEAL_SCAN_PROVIDER_NOT_FOUND" });
   });
 
   it("rejects a wrong password without issuing a session", async () => {
