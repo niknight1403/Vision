@@ -483,6 +483,7 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
         workerId: "worker-expired-heartbeat-contender",
         eventTypes: ["test.lease.expired-heartbeat"],
       })).resolves.toMatchObject({ id: event.id });
+      releaseHandler();
       await expect(worker).rejects.toThrow("OUTBOX_LEASE_LOST");
     } finally {
       releaseHandler();
