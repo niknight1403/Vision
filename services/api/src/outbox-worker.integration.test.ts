@@ -434,13 +434,17 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     const duringHandler = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
     expect(duringHandler.status).toBe("PROCESSING");
     expect(duringHandler.leaseUntil?.getTime()).toBeGreaterThan(Date.now() + 3_000);
+    expect(await claimOutboxMessage(prisma, {
+      workerId: "worker-lease-renewal-contender",
+      eventTypes: ["test.lease.renewal"],
+    })).toBeNull();
 
     expect(await worker).toBe("PUBLISHED");
     const completed = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
     expect(completed.status).toBe("PUBLISHED");
     expect(completed.lockedBy).toBeNull();
     expect(completed.leaseUntil).toBeNull();
-  });
+  }, 15_000);
 
   it("moves exhausted messages to dead letter and clears the lease", async () => {
     const aggregateId = `outbox-dead-letter-${process.pid}-${Date.now()}`;
