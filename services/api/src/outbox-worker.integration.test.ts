@@ -864,6 +864,74 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     )).toBe(true);
   }, 15_000);
 
+
+  it("accounts for mixed success and dead-letter outcomes when parallel workers drain", async () => {
+    const suffix = `${process.pid}-${Date.now()}`;
+    const aggregateIdsForTest = [0, 1].map((index) => `outbox-parallel-mixed-drain-${suffix}-${index}`);
+    aggregateIds.push(...aggregateIdsForTest);
+    const events = await Promise.all(aggregateIdsForTest.map((aggregateId) =>
+      prisma.outboxEvent.create({
+        data: {
+          eventType: "test.graceful-drain.mixed",
+          aggregateId,
+          payload: { test: true },
+        },
+      }),
+    ));
+
+    const controllers = [new AbortController(), new AbortController()];
+    const gates: Promise<void>[] = [];
+    const releases: Array<() => void> = [];
+    for (let index = 0; index < 2; index += 1) {
+      gates.push(new Promise<void>((resolve) => { releases[index] = resolve; }));
+    }
+    let enteredCount = 0;
+    let signalBothEntered!: () => void;
+    const bothEntered = new Promise<void>((resolve) => { signalBothEntered = resolve; });
+    const runners = controllers.map((controller, index) =>
+      runOutboxWorker(
+        prisma,
+        {
+          workerId: `worker-parallel-mixed-drain-${index}`,
+          leaseSeconds: 30,
+          maxAttempts: 1,
+          eventTypes: ["test.graceful-drain.mixed"],
+        },
+        async () => {
+          enteredCount += 1;
+          if (enteredCount === 2) signalBothEntered();
+          await gates[index];
+          if (index === 1) throw new Error("permanent test failure");
+        },
+        { signal: controller.signal, pollIntervalMs: 50 },
+      ),
+    );
+
+    try {
+      await bothEntered;
+      controllers.forEach((controller) => controller.abort());
+      releases.forEach((release) => release());
+      const results = await Promise.all(runners);
+      expect(results).toEqual([
+        { published: 1, retried: 0, deadLettered: 0 },
+        { published: 0, retried: 0, deadLettered: 1 },
+      ]);
+    } finally {
+      releases.forEach((release) => release());
+      await Promise.all(runners.map((runner) => runner.catch(() => undefined)));
+    }
+
+    const rows = await prisma.outboxEvent.findMany({
+      where: { id: { in: events.map((event) => event.id) } },
+    });
+    expect(rows.filter((event) => event.status === "PUBLISHED")).toHaveLength(1);
+    expect(rows.filter((event) => event.status === "DEAD_LETTER")).toHaveLength(1);
+    expect(rows.every((event) => event.lockedBy === null && event.leaseUntil === null)).toBe(true);
+    const deadLetter = rows.find((event) => event.status === "DEAD_LETTER");
+    expect(deadLetter?.attempts).toBe(1);
+    expect(deadLetter?.lastError).toContain("permanent test failure");
+  }, 15_000);
+
 });
 
 if (!databaseEnabled) {
