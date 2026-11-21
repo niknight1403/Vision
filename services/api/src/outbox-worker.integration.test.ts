@@ -987,6 +987,77 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(row.leaseUntil).toBeNull();
   }, 15_000);
 
+
+  it("exits cleanly when shutdown arrives during a claim that finds no matching event", async () => {
+    const aggregateId = `outbox-abort-empty-claim-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const unrelated = await prisma.outboxEvent.create({
+      data: {
+        eventType: "test.abort-empty-claim.unrelated",
+        aggregateId,
+        payload: { test: true },
+      },
+    });
+
+    const controller = new AbortController();
+    let signalClaimReturned!: () => void;
+    let releaseClaim!: () => void;
+    const claimReturned = new Promise<void>((resolve) => { signalClaimReturned = resolve; });
+    const claimGate = new Promise<void>((resolve) => { releaseClaim = resolve; });
+    let interceptedClaim = false;
+    const delayedPrisma = new Proxy(prisma, {
+      get(target, property) {
+        if (property === "$queryRaw") {
+          return async (...args: Parameters<PrismaClient["$queryRaw"]>) => {
+            const rows = await target.$queryRaw(...args);
+            if (!interceptedClaim) {
+              interceptedClaim = true;
+              expect(rows).toHaveLength(0);
+              signalClaimReturned();
+              await claimGate;
+            }
+            return rows;
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as PrismaClient;
+
+    let handlerCalls = 0;
+    const runner = runOutboxWorker(
+      delayedPrisma,
+      {
+        workerId: "worker-abort-empty-claim",
+        leaseSeconds: 30,
+        eventTypes: ["test.abort-empty-claim.target"],
+      },
+      async () => { handlerCalls += 1; },
+      { signal: controller.signal, pollIntervalMs: 5_000 },
+    );
+
+    try {
+      // The database claim has completed with no matching row, but its result
+      // has not yet reached the worker loop.
+      await claimReturned;
+      controller.abort();
+      releaseClaim();
+      await expect(runner).resolves.toEqual({ published: 0, retried: 0, deadLettered: 0 });
+    } finally {
+      controller.abort();
+      releaseClaim();
+      await runner.catch(() => undefined);
+    }
+
+    expect(interceptedClaim).toBe(true);
+    expect(handlerCalls).toBe(0);
+    const row = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: unrelated.id } });
+    expect(row.status).toBe("PENDING");
+    expect(row.attempts).toBe(0);
+    expect(row.lockedBy).toBeNull();
+    expect(row.leaseUntil).toBeNull();
+  }, 15_000);
+
 });
 
 if (!databaseEnabled) {
