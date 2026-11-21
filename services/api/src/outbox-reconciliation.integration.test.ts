@@ -123,6 +123,44 @@ suite("outbox reconciliation (PostgreSQL)", () => {
       finding.code === "PUBLISHED_TIMESTAMP_MISSING")).toBe(false);
   });
 
+
+  it("honors an existing receipt when required-consumer configuration contains duplicates", async () => {
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.reconciliation.consumer.dedup.receipt",
+      aggregateId: `reconciliation-consumer-dedup-receipt-${process.pid}-${Date.now()}`,
+      payload: { marker: "dedup-receipt-fixture" },
+      status: "PUBLISHED",
+      publishedAt: new Date(),
+    } });
+    ids.push(event.id);
+    await prisma.outboxConsumerReceipt.create({ data: {
+      eventId: event.id,
+      consumerName: "ledger-projection",
+    } });
+
+    const report = await reconcileOutbox(prisma, {
+      expectedConsumers: {
+        "test.reconciliation.consumer.dedup.receipt": [
+          "ledger-projection", "ledger-projection", "audit",
+        ],
+      },
+    });
+
+    const findings = report.findings.filter((finding) =>
+      finding.eventId === event.id && finding.code === "REQUIRED_RECEIPT_MISSING");
+    expect(findings).toEqual([{
+      code: "REQUIRED_RECEIPT_MISSING",
+      severity: "CRITICAL",
+      eventId: event.id,
+      eventType: "test.reconciliation.consumer.dedup.receipt",
+      consumerName: "audit",
+    }]);
+    const receipt = await prisma.outboxConsumerReceipt.findUniqueOrThrow({
+      where: { consumerName_eventId: { consumerName: "ledger-projection", eventId: event.id } },
+    });
+    expect(receipt.eventId).toBe(event.id);
+  });
+
   it("applies since and limit deterministically and leaves selected events unchanged", async () => {
     const createdAt = new Date(Date.now() + 5_000);
     const fixtures = await prisma.outboxEvent.createManyAndReturn({

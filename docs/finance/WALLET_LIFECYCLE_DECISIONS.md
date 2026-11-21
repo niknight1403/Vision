@@ -300,3 +300,10 @@ This is diagnostic correctness hardening only. It does not alter event dispatch,
 The PostgreSQL integration suite now exercises duplicate required-consumer names through the database-backed reconciliation entry point. It asserts that each distinct missing consumer produces exactly one finding even when configuration repeats a consumer name, while a published timestamp remains valid.
 
 This is integration-test and documentation coverage only. It does not mutate event state beyond isolated fixture creation/cleanup, dispatch events, alter receipts, or change wallet, journal, payment, or external-effect behavior.
+
+
+## Sprint 3.26 — duplicate consumer configuration with existing receipts
+
+Unit and PostgreSQL integration coverage now verify the complementary case: when a required consumer appears multiple times in configuration but its durable receipt exists, reconciliation emits no missing-receipt finding for that consumer. Other distinct consumers without receipts remain individually reported. The database test also verifies the persisted receipt remains present.
+
+This is test and documentation coverage only. No production logic, event dispatch, receipt mutation, wallet/journal state, payment behavior, or external effects are changed.
