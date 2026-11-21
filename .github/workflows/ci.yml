@@ -144,3 +144,75 @@ jobs:
           path: /tmp/autonomagent-api-db-report.json
           if-no-files-found: warn
           retention-days: 14
+
+  worker-auth:
+    # Proves the repository secret VISION_WORKER_TOKEN is actually wired into the
+    # pipeline and that the private worker only accepts that exact bearer token.
+    # The secret value is never printed; only its length is echoed.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: services/vision-worker
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/vision-worker/pyproject.toml
+      - name: Install vision worker and test dependencies
+        run: python -m pip install -e ".[test]"
+      - name: Require a configured worker token
+        env:
+          VISION_WORKER_TOKEN: ${{ secrets.VISION_WORKER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "${#VISION_WORKER_TOKEN}" -lt 32 ]; then
+            echo "::error::repository secret VISION_WORKER_TOKEN is missing or shorter than 32 characters"
+            exit 2
+          fi
+          echo "VISION_WORKER_TOKEN is configured (length ${#VISION_WORKER_TOKEN})"
+      - name: Verify the worker enforces the token
+        env:
+          VISION_WORKER_TOKEN: ${{ secrets.VISION_WORKER_TOKEN }}
+          VISION_ALLOWED_IMAGE_HOSTS: images.invalid
+        run: |
+          set -euo pipefail
+          python -m vision_worker.main &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          ready=0
+          for _ in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8091/health > health.json 2>/dev/null; then ready=1; break; fi
+            sleep 1
+          done
+          if [ "$ready" != "1" ]; then
+            echo "::error::the worker did not become healthy within 40s"
+            exit 1
+          fi
+          python3 -c "import json;d=json.load(open('health.json'));assert d.get('status')=='ok',d"
+          echo "health ok"
+          body='{"candidate_id":"ci-smoke","title":"CI smoke","image_url":"https://images.invalid/item.jpg","asking_price_minor":1000}'
+          post() { curl -s -o "$1" -w '%{http_code}' -X POST http://127.0.0.1:8091/v1/analyze -H 'content-type: application/json' "${@:2}" -d "$body"; }
+          code_none="$(post /tmp/none.json)"
+          code_wrong="$(post /tmp/wrong.json -H 'authorization: Bearer wrong-token-wrong-token-wrong-token')"
+          code_valid="$(post /tmp/valid.json -H "authorization: Bearer $VISION_WORKER_TOKEN")"
+          echo "no-token=$code_none wrong-token=$code_wrong valid-token=$code_valid"
+          [ "$code_none" = "401" ] || { echo "::error::unauthenticated call returned HTTP $code_none"; exit 1; }
+          [ "$code_wrong" = "401" ] || { echo "::error::a wrong bearer token returned HTTP $code_wrong"; exit 1; }
+          if [ "$code_valid" != "200" ]; then
+            echo "::error::the repository secret VISION_WORKER_TOKEN was not accepted by the worker (HTTP $code_valid)"
+            exit 1
+          fi
+          python3 - <<'JSON'
+          import json
+          data = json.load(open("/tmp/valid.json"))
+          assert data.get("purchase_authorized") is False, data
+          assert data.get("authenticity_verified") is False, data
+          assert isinstance(data.get("assessment"), dict), data
+          print("valid token accepted; purchase_authorized=false, authenticity_verified=false")
+          JSON
