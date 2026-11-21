@@ -686,7 +686,8 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(pendingRow.status).toBe("PENDING");
     expect(pendingRow.attempts).toBe(0);
   }, 15_000);
-\n});
+
+});
 
 if (!databaseEnabled) {
   void prisma.$disconnect();
