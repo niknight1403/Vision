@@ -277,3 +277,12 @@ The bounded PostgreSQL outbox reconciliation integration test now supplies multi
 Unlike a set-membership or post-sorted assertion, this verifies the actual report sequence returned by the database-backed reconciliation entry point. The existing before/after row comparison remains in place, and the report must continue to omit payload data.
 
 This is integration-test and documentation coverage only. No production behavior, event state, receipt, lease, wallet balance, ledger entry, journal posting, payment state, or external side effect is changed.
+
+
+## Sprint 3.23 — required consumer receipt reconciliation proof
+
+The PostgreSQL outbox reconciliation integration suite now creates a published event with an actual durable consumer receipt for an explicitly required consumer. It verifies that reconciliation emits no finding for that event when the receipt exists and confirms the persisted receipt remains present.
+
+Together with the existing missing-receipt case, this covers both sides of the required-consumer check against PostgreSQL rather than only testing the pure classifier. The fixture is isolated and cleaned up by the integration suite.
+
+This is test and documentation coverage only. It does not dispatch events, create business effects, mutate wallet or journal state, or authorize external financial actions.
