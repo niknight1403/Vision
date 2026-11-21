@@ -141,7 +141,9 @@ export async function releaseFundsInTransaction(
     `;
     if (rows.length === 0) throw new Error("WALLET_NOT_FOUND");
 
-    const existing = await tx.walletLedger.findUnique({ where: { referenceId: input.referenceId } });
+    const existing = await tx.walletLedger.findUnique({
+      where: { accountId_referenceId: { accountId: input.accountId, referenceId: input.referenceId } },
+    });
     if (existing) {
       if (existing.accountId !== input.accountId ||
           existing.entryType !== "RESERVATION_RELEASE" ||
