@@ -50,6 +50,30 @@ describe("runSerializableTransaction", () => {
     expect(attempts).toBe(2);
   });
 
+  it("retries PostgreSQL 40001 errors wrapped by Prisma raw queries", async () => {
+    let attempts = 0;
+    const tx = {} as Prisma.TransactionClient;
+    const prisma = {
+      $transaction: vi.fn(async (operation: (client: Prisma.TransactionClient) => Promise<string>) => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw {
+            code: "P2010",
+            message: "Raw query failed",
+            meta: { code: "40001", message: "could not serialize access due to concurrent update" },
+          };
+        }
+        return operation(tx);
+      }),
+    } as unknown as PrismaClient;
+
+    await expect(runSerializableTransaction(prisma, async () => "committed", {
+      maxAttempts: 2,
+      baseDelayMs: 0,
+    })).resolves.toBe("committed");
+    expect(attempts).toBe(2);
+  });
+
   it("does not retry non-serialization errors", async () => {
     const failure = new Error("business validation failed");
     const prisma = {
