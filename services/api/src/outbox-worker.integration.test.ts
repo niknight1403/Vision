@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
-import { processOneOutboxMessage, processOneOutboxMessageWithInbox } from "./outbox-worker.js";
+import { claimOutboxMessage, processOneOutboxMessage, processOneOutboxMessageWithInbox } from "./outbox-worker.js";
 
 const databaseEnabled = Boolean(process.env.DATABASE_URL);
 const suite = describe.skipIf(!databaseEnabled);
@@ -16,6 +16,42 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
       await prisma.outboxEvent.deleteMany({ where: { aggregateId: { in: aggregateIds } } });
     }
     await prisma.$disconnect();
+  });
+
+
+  it("allows only one concurrent claimant to recover an expired processing lease", async () => {
+    const aggregateId = `outbox-expired-lease-race-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.lease.expired-race",
+      aggregateId,
+      payload: { test: true },
+      status: "PROCESSING",
+      attempts: 4,
+      lockedBy: "previous-worker-attempt",
+      leaseUntil: new Date(Date.now() - 60_000),
+    } });
+
+    const [firstClaim, secondClaim] = await Promise.all([
+      claimOutboxMessage(prisma, {
+        workerId: "expired-race-worker-one",
+        eventTypes: ["test.lease.expired-race"],
+      }),
+      claimOutboxMessage(prisma, {
+        workerId: "expired-race-worker-two",
+        eventTypes: ["test.lease.expired-race"],
+      }),
+    ]);
+
+    expect(Boolean(firstClaim)).not.toBe(Boolean(secondClaim));
+    const winningClaim = firstClaim ?? secondClaim;
+    expect(winningClaim).not.toBeNull();
+
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("PROCESSING");
+    expect(current.attempts).toBe(5);
+    expect(current.lockedBy).toBe(winningClaim!.claimToken);
+    expect(current.leaseUntil?.getTime()).toBeGreaterThan(Date.now());
   });
 
   it("processes database effects through the inbox before acknowledging the outbox event", async () => {
