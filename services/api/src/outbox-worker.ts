@@ -36,10 +36,10 @@ async function markPublished(prisma: PrismaClient, id: string, workerId: string)
   if (result.count !== 1) throw new Error("OUTBOX_LEASE_LOST");
 }
 
-async function markFailed(prisma: PrismaClient, message: OutboxMessage, options: WorkerOptions, error: unknown): Promise<void> {
+async function markFailed(prisma: PrismaClient, message: OutboxMessage, options: WorkerOptions, error: unknown): Promise<"RETRY_SCHEDULED" | "DEAD_LETTER"> {
   const dead = message.attempts >= (options.maxAttempts ?? 8);
   const detail = redactOutboxError(error);
-  await prisma.outboxEvent.updateMany({
+  const changed = await prisma.outboxEvent.updateMany({
     where: { id: message.id, status: "PROCESSING", lockedBy: options.workerId },
     data: {
       status: dead ? "DEAD_LETTER" : "PENDING",
@@ -47,6 +47,8 @@ async function markFailed(prisma: PrismaClient, message: OutboxMessage, options:
       leaseUntil: null, lockedBy: null, lastError: detail.slice(0, 2000),
     },
   });
+  if (changed.count !== 1) throw new Error("OUTBOX_LEASE_LOST");
+  return dead ? "DEAD_LETTER" : "RETRY_SCHEDULED";
 }
 
 /** At-least-once delivery. Handlers must be idempotent across crash/retry boundaries. */
@@ -60,7 +62,6 @@ export async function processOneOutboxMessage(
     await markPublished(prisma, message.id, options.workerId);
     return "PUBLISHED";
   } catch (error) {
-    await markFailed(prisma, message, options, error);
-    return message.attempts >= (options.maxAttempts ?? 8) ? "DEAD_LETTER" : "RETRY_SCHEDULED";
+    return await markFailed(prisma, message, options, error);
   }
 }
