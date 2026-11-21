@@ -163,6 +163,71 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     })).toBe(1);
   });
 
+  it("composes partial release, journal, and outbox atomically", async () => {
+    const sourceReference = "wallet-release-journal-source";
+    await reserveFunds(prisma, {
+      accountId, ...walletScope(), amountCents: 1_800n,
+      referenceId: sourceReference, description: "release composition source",
+    });
+
+    const rollbackReference = "wallet-release-journal-rollback";
+    await expect(runSerializableTransaction(prisma, async (tx) => {
+      await releaseFundsInTransaction(tx, {
+        accountId, ...walletScope(), amountCents: 800n,
+        referenceId: rollbackReference, reservationReferenceId: sourceReference,
+        correlationId: rollbackReference, description: "rollback composition release",
+      });
+      const journal = await postJournalTransactionInTransaction(tx, {
+        tenantId, referenceId: rollbackReference, currency: "EUR",
+        description: "test-only release composition journal",
+        entries: [
+          { accountCode: "TEST-RELEASE-DEBIT", debitCents: 800n },
+          { accountCode: "TEST-RELEASE-CREDIT", creditCents: 800n },
+        ],
+      });
+      await enqueueOutboxEvent(tx, {
+        eventType: "test.wallet-release-journal.composed",
+        aggregateId: accountId,
+        correlationId: rollbackReference,
+        payload: { journalTransactionId: journal.id },
+      });
+      throw new Error("FORCE_RELEASE_COMPOSITION_ROLLBACK");
+    }, { baseDelayMs: 0 })).rejects.toThrow("FORCE_RELEASE_COMPOSITION_ROLLBACK");
+
+    expect((await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } })).reservedCents).toBe(1_800n);
+    expect(await prisma.walletLedger.count({ where: { referenceId: rollbackReference } })).toBe(0);
+    expect(await prisma.journalTransaction.count({ where: { tenantId, referenceId: rollbackReference } })).toBe(0);
+    expect(await prisma.outboxEvent.count({ where: { correlationId: rollbackReference } })).toBe(0);
+
+    const commitReference = "wallet-release-journal-commit";
+    await runSerializableTransaction(prisma, async (tx) => {
+      await releaseFundsInTransaction(tx, {
+        accountId, ...walletScope(), amountCents: 800n,
+        referenceId: commitReference, reservationReferenceId: sourceReference,
+        correlationId: commitReference, description: "committed composition release",
+      });
+      const journal = await postJournalTransactionInTransaction(tx, {
+        tenantId, referenceId: commitReference, currency: "EUR",
+        description: "test-only release composition journal",
+        entries: [
+          { accountCode: "TEST-RELEASE-DEBIT", debitCents: 800n },
+          { accountCode: "TEST-RELEASE-CREDIT", creditCents: 800n },
+        ],
+      });
+      await enqueueOutboxEvent(tx, {
+        eventType: "test.wallet-release-journal.composed",
+        aggregateId: accountId,
+        correlationId: commitReference,
+        payload: { journalTransactionId: journal.id },
+      });
+    }, { baseDelayMs: 0 });
+
+    expect((await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } })).reservedCents).toBe(1_000n);
+    expect(await prisma.walletLedger.count({ where: { referenceId: commitReference, entryType: "RESERVATION_RELEASE" } })).toBe(1);
+    expect(await prisma.journalTransaction.count({ where: { tenantId, referenceId: commitReference } })).toBe(1);
+    expect(await prisma.outboxEvent.count({ where: { correlationId: commitReference } })).toBe(2);
+  });
+
   it("binds an idempotent release to its source reservation", async () => {
     await reserveFunds(prisma, {
       accountId, ...walletScope(), amountCents: 4_000n, referenceId: "reservation-idempotent", description: "test reservation",
