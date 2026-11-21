@@ -85,6 +85,18 @@ export function reconcileOutboxEvents(
     }
   }
 
+  // Canonical order makes reports comparable regardless of database/input order
+  // or the order in which required consumers were configured.
+  findings.sort((left, right) => {
+    const leftKey = [left.eventId, left.code, left.consumerName ?? ""];
+    const rightKey = [right.eventId, right.code, right.consumerName ?? ""];
+    for (let index = 0; index < leftKey.length; index += 1) {
+      if (leftKey[index] < rightKey[index]) return -1;
+      if (leftKey[index] > rightKey[index]) return 1;
+    }
+    return 0;
+  });
+
   return { scanned: events.length, counts, findings, generatedAt: now.toISOString() };
 }
 
