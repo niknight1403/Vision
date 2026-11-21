@@ -687,6 +687,64 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(current.lastError).not.toContain("graceful-drain-test-secret");
   }, 15_000);
 
+  it("schedules a failed active handler for retry before graceful shutdown returns", async () => {
+    const suffix = `${process.pid}-${Date.now()}`;
+    const aggregateId = `outbox-graceful-retry-${suffix}`;
+    const pendingAggregateId = `outbox-graceful-retry-pending-${suffix}`;
+    aggregateIds.push(aggregateId, pendingAggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.graceful-drain.retry", aggregateId, payload: { test: true },
+    } });
+    const pending = await prisma.outboxEvent.create({ data: {
+      eventType: "test.graceful-drain.retry", aggregateId: pendingAggregateId, payload: { test: true },
+    } });
+
+    const controller = new AbortController();
+    let signalEntered!: () => void;
+    let releaseHandler!: () => void;
+    const handlerEntered = new Promise<void>((resolve) => { signalEntered = resolve; });
+    const handlerGate = new Promise<void>((resolve) => { releaseHandler = resolve; });
+    const runner = runOutboxWorker(
+      prisma,
+      {
+        workerId: "worker-graceful-drain-retry",
+        leaseSeconds: 30,
+        maxAttempts: 2,
+        eventTypes: ["test.graceful-drain.retry"],
+      },
+      async () => {
+        signalEntered();
+        await handlerGate;
+        throw new Error("temporary upstream failure");
+      },
+      { signal: controller.signal, pollIntervalMs: 50 },
+    );
+
+    try {
+      await handlerEntered;
+      controller.abort();
+      releaseHandler();
+      await expect(runner).resolves.toEqual({ published: 0, retried: 1, deadLettered: 0 });
+    } finally {
+      releaseHandler();
+      await runner.catch(() => undefined);
+    }
+
+    const retried = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(retried.status).toBe("PENDING");
+    expect(retried.attempts).toBe(1);
+    expect(retried.availableAt.getTime()).toBeGreaterThan(Date.now());
+    expect(retried.lockedBy).toBeNull();
+    expect(retried.leaseUntil).toBeNull();
+    expect(retried.lastError).toContain("temporary upstream failure");
+
+    const untouched = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: pending.id } });
+    expect(untouched.status).toBe("PENDING");
+    expect(untouched.attempts).toBe(0);
+    expect(untouched.lockedBy).toBeNull();
+    expect(untouched.leaseUntil).toBeNull();
+  }, 15_000);
+
   it("stops claiming on shutdown and drains the active handler before returning", async () => {
     const suffix = `${process.pid}-${Date.now()}`;
     const aggregateId = `outbox-graceful-drain-${suffix}`;
