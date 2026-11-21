@@ -100,8 +100,8 @@ model RefreshSession {
 model WalletAccount {
   id                String         @id @default(cuid())
   ownerId           String
-  tenantId          String
-  tenant            Tenant         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  tenantId          String?
+  tenant            Tenant?        @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   currency          String         @default("EUR")
   balanceCents      BigInt         @default(0)
   reservedCents     BigInt         @default(0)
@@ -110,6 +110,7 @@ model WalletAccount {
   updatedAt         DateTime       @updatedAt
   ledgerEntries     WalletLedger[]
 
+  @@unique([ownerId, currency])
   @@unique([tenantId, ownerId, currency])
   @@index([tenantId, createdAt])
 }
@@ -178,8 +179,8 @@ enum ExecutionStatus {
 model AgentTask {
   id             String          @id @default(cuid())
   ownerId        String
-  tenantId       String
-  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  tenantId       String?
+  tenant         Tenant?         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   taskType       String
   status         ExecutionStatus @default(QUEUED)
   input          Json
@@ -187,7 +188,7 @@ model AgentTask {
   result         Json?
   checkpoint     Json?
   correlationId  String?
-  idempotencyKey String
+  idempotencyKey String   @unique
   attempt        Int             @default(0)
   maxAttempts    Int             @default(3)
   availableAt    DateTime        @default(now())
