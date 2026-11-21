@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { claimOutboxMessage, processOneOutboxMessage, processOneOutboxMessageWithInbox, runOutboxWorker } from "./outbox-worker.js";
 
@@ -876,6 +876,14 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
       },
     });
     const controller = new AbortController();
+    let signalIdleWaitStarted!: () => void;
+    const idleWaitStarted = new Promise<void>((resolve) => { signalIdleWaitStarted = resolve; });
+    const originalSetTimeout = globalThis.setTimeout;
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((handler, timeout, ...args) => {
+      const timer = originalSetTimeout(handler, timeout, ...args);
+      if (timeout === 5_000 && typeof handler === "function") signalIdleWaitStarted();
+      return timer;
+    });
     const runner = runOutboxWorker(
       prisma,
       {
@@ -890,14 +898,15 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     );
 
     try {
-      // Allow the first empty claim to enter its long polling wait.
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Synchronize with the worker's actual idle timer, not an arbitrary delay.
+      await idleWaitStarted;
       const startedAt = Date.now();
       controller.abort();
       await expect(runner).resolves.toEqual({ published: 0, retried: 0, deadLettered: 0 });
       expect(Date.now() - startedAt).toBeLessThan(1_000);
     } finally {
       controller.abort();
+      timeoutSpy.mockRestore();
       await runner.catch(() => undefined);
     }
 
