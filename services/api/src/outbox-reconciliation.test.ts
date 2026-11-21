@@ -77,4 +77,29 @@ describe("read-only outbox reconciliation", () => {
     expect(() => reconcileOutboxEvents([], {}, { pendingWarningSeconds: Number.NaN }))
       .toThrow("INVALID_PENDING_WARNING_SECONDS");
   });
+
+  it("returns identical findings for permuted events and consumer configuration", () => {
+    const eventA = event({ id: "event-a", publishedAt: null });
+    const eventB = event({ id: "event-b", publishedAt: null });
+    const first = reconcileOutboxEvents(
+      [eventB, eventA],
+      { "wallet.reservation.created": ["consumer-z", "consumer-a"] },
+      { now },
+    );
+    const second = reconcileOutboxEvents(
+      [eventA, eventB],
+      { "wallet.reservation.created": ["consumer-a", "consumer-z"] },
+      { now },
+    );
+
+    expect(first).toEqual(second);
+    expect(first.findings.map(({ eventId, code, consumerName }) => [eventId, code, consumerName ?? null])).toEqual([
+      ["event-a", "PUBLISHED_TIMESTAMP_MISSING", null],
+      ["event-a", "REQUIRED_RECEIPT_MISSING", "consumer-a"],
+      ["event-a", "REQUIRED_RECEIPT_MISSING", "consumer-z"],
+      ["event-b", "PUBLISHED_TIMESTAMP_MISSING", null],
+      ["event-b", "REQUIRED_RECEIPT_MISSING", "consumer-a"],
+      ["event-b", "REQUIRED_RECEIPT_MISSING", "consumer-z"],
+    ]);
+  });
 });
