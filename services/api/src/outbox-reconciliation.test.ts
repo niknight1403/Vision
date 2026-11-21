@@ -54,8 +54,27 @@ describe("read-only outbox reconciliation", () => {
     ]);
   });
 
+  it("treats exact lease expiry and exact pending threshold as not overdue", () => {
+    const report = reconcileOutboxEvents([
+      event({ id: "lease-at-boundary", status: "PROCESSING", lockedBy: "worker", leaseUntil: now, publishedAt: null }),
+      event({ id: "pending-at-boundary", status: "PENDING", publishedAt: null, availableAt: new Date(now.getTime() - 60_000) }),
+    ], {}, { now, pendingWarningSeconds: 60 });
+    expect(report.findings).toEqual([]);
+    expect(report.counts.PROCESSING).toBe(1);
+    expect(report.counts.PENDING).toBe(1);
+  });
+
+  it("flags a pending event when the warning threshold is zero and it is already due", () => {
+    const report = reconcileOutboxEvents([
+      event({ status: "PENDING", publishedAt: null, availableAt: new Date(now.getTime() - 1) }),
+    ], {}, { now, pendingWarningSeconds: 0 });
+    expect(report.findings).toContainEqual(expect.objectContaining({ code: "PENDING_OVERDUE", eventId: "event-1" }));
+  });
+
   it("rejects invalid thresholds", () => {
     expect(() => reconcileOutboxEvents([], {}, { pendingWarningSeconds: -1 }))
+      .toThrow("INVALID_PENDING_WARNING_SECONDS");
+    expect(() => reconcileOutboxEvents([], {}, { pendingWarningSeconds: Number.NaN }))
       .toThrow("INVALID_PENDING_WARNING_SECONDS");
   });
 });
