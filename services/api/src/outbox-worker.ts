@@ -45,7 +45,7 @@ export async function claimOutboxMessage(prisma: PrismaClient, options: WorkerOp
       SELECT id FROM "OutboxEvent"
       WHERE (
         (status = 'PENDING' AND "availableAt" <= NOW())
-        OR (status = 'PROCESSING' AND "leaseUntil" < NOW())
+        OR (status = 'PROCESSING' AND ("leaseUntil" IS NULL OR "leaseUntil" < NOW()))
       )
       ${eventTypeFilter}
       ORDER BY "availableAt", "createdAt"
