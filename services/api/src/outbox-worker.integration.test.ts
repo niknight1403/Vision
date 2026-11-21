@@ -226,6 +226,77 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(current.leaseUntil).toBeNull();
   });
 
+
+  it("prevents a stale worker failure from releasing a replacement lease", async () => {
+    const aggregateId = `outbox-stale-failure-fencing-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.lease.stale-failure",
+      aggregateId,
+      payload: { test: true },
+    } });
+
+    let signalFirstEntered!: () => void;
+    let signalSecondEntered!: () => void;
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const firstEntered = new Promise<void>((resolve) => { signalFirstEntered = resolve; });
+    const secondEntered = new Promise<void>((resolve) => { signalSecondEntered = resolve; });
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const options = {
+      workerId: "worker-failure-reused-id",
+      leaseSeconds: 30,
+      eventTypes: ["test.lease.stale-failure"],
+    };
+
+    const firstWorker = processOneOutboxMessage(prisma, options, async () => {
+      signalFirstEntered();
+      await firstGate;
+      throw new Error("stale handler failure");
+    });
+    let secondWorker: ReturnType<typeof processOneOutboxMessage> | undefined;
+
+    try {
+      await firstEntered;
+      await prisma.outboxEvent.updateMany({
+        where: { id: event.id, status: "PROCESSING" },
+        data: { leaseUntil: new Date(Date.now() - 1_000) },
+      });
+
+      secondWorker = processOneOutboxMessage(prisma, options, async () => {
+        signalSecondEntered();
+        await secondGate;
+      });
+      await secondEntered;
+
+      releaseFirst();
+      await expect(firstWorker).rejects.toThrow("OUTBOX_LEASE_LOST");
+
+      const replacement = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+      expect(replacement.status).toBe("PROCESSING");
+      expect(replacement.attempts).toBe(2);
+      expect(replacement.lockedBy).toContain("worker-failure-reused-id:");
+      expect(replacement.leaseUntil?.getTime()).toBeGreaterThan(Date.now());
+      expect(replacement.lastError).toBeNull();
+
+      releaseSecond();
+      expect(await secondWorker).toBe("PUBLISHED");
+    } finally {
+      releaseFirst();
+      releaseSecond();
+      await firstWorker.catch(() => undefined);
+      if (secondWorker) await secondWorker.catch(() => undefined);
+    }
+
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("PUBLISHED");
+    expect(current.attempts).toBe(2);
+    expect(current.lockedBy).toBeNull();
+    expect(current.leaseUntil).toBeNull();
+    expect(current.lastError).toBeNull();
+  });
+
   it("releases its own failed lease and schedules a retry", async () => {
     const aggregateId = `outbox-retry-${process.pid}-${Date.now()}`;
     aggregateIds.push(aggregateId);
