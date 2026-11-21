@@ -898,11 +898,10 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
           eventTypes: ["test.graceful-drain.mixed"],
         },
         async () => {
-          const handlerIndex = enteredCount;
           enteredCount += 1;
           if (enteredCount === 2) signalBothEntered();
-          await gates[handlerIndex];
-          if (handlerIndex === 1) throw new Error("permanent test failure");
+          await gates[index];
+          if (index === 1) throw new Error("permanent test failure");
         },
         { signal: controller.signal, pollIntervalMs: 50 },
       ),
