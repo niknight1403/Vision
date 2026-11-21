@@ -74,9 +74,21 @@ A generic contract adapter is now available in `src/providers/catalog-rest-adapt
 - `GET /products?q=<query>&limit=<1..50>&currency=<ISO-4217>`
 - a JSON response shaped as `{ "items": [{ "id", "title", "url", "currency", "priceMinor", "observedAt" }] }`
 
-Product payloads are validated and normalized; product links must use HTTPS. The adapter advertises only `PRODUCT_SEARCH`. It has no purchase, listing, payment, or order mutation methods. `bootstrap.ts` registers it only when the `PROVIDER_CATALOG_DEMO_*` server environment is configured.
+Product payloads are validated and normalized; product links must use HTTPS. The adapter advertises only `PRODUCT_SEARCH`. It has no purchase, listing, payment, or order mutation methods. `bootstrap.ts` registers it only when the `PROVIDER_CATALOG_LIVE_*` server environment is configured.
 
 This is a generic integration contract for a real provider-side catalog service, not a named marketplace adapter. No endpoint or credential is supplied by default. The authenticated scan route exposes it only after server-side configuration and response validation.
+
+### Isolated staging provider
+
+For end-to-end verification without live data, enable the in-memory synthetic adapter only with both gates:
+
+```bash
+NODE_ENV=staging
+STAGING_PROVIDER_ENABLED=true
+STAGING_SYNTHETIC_DATA_ACK=I_UNDERSTAND_SYNTHETIC_DATA
+```
+
+It registers as `catalog-staging`, returns `simulated: true`, supports only read-only `PRODUCT_SEARCH`, and never performs network or mutating operations. Bootstrap rejects it outside staging or without the exact acknowledgement. Synthetic candidates remain ineligible for approval under the existing simulated-data safety rule.
 
 
 ### Deal analysis and risk screening

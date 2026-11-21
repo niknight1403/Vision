@@ -129,6 +129,7 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     emergencyStop: config.emergencyStop,
     tradingReady: false,
     providerConfigured: Boolean(dependencies.providers?.list().length),
+    providers: dependencies.providers?.list() ?? [],
     note: "Autonomous sourcing and analysis only; mutating marketplace actions require a reviewed adapter.",
   }));
 
