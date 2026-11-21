@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { processOutboxEventInTransaction, type TransactionalOutboxConsumer } from "./outbox-inbox.js";
 
@@ -5,6 +6,7 @@ export type OutboxMessage = {
   id: string; eventType: string; aggregateId: string; correlationId: string | null;
   schemaVersion: number; payload: unknown; attempts: number;
 };
+type ClaimedOutboxMessage = OutboxMessage & { claimToken: string };
 export type OutboxHandler = (message: OutboxMessage) => Promise<void>;
 export type WorkerOptions = { workerId: string; leaseSeconds?: number; maxAttempts?: number; baseRetrySeconds?: number; eventTypes?: string[] };
 
@@ -33,10 +35,11 @@ function validateWorkerOptions(options: WorkerOptions): string {
   return workerId;
 }
 
-export async function claimOutboxMessage(prisma: PrismaClient, options: WorkerOptions): Promise<OutboxMessage | null> {
+export async function claimOutboxMessage(prisma: PrismaClient, options: WorkerOptions): Promise<ClaimedOutboxMessage | null> {
   const leaseSeconds = options.leaseSeconds ?? 60;
   const workerId = validateWorkerOptions(options);
   if (!Number.isInteger(leaseSeconds) || leaseSeconds < 5 || leaseSeconds > 3600) throw new Error("INVALID_LEASE_SECONDS");
+  const claimToken = `${workerId}:${randomUUID()}`;
   const eventTypeFilter = options.eventTypes?.length
     ? Prisma.sql`AND "eventType" IN (${Prisma.join(options.eventTypes)})`
     : Prisma.empty;
@@ -55,19 +58,19 @@ export async function claimOutboxMessage(prisma: PrismaClient, options: WorkerOp
     UPDATE "OutboxEvent" event
     SET status = 'PROCESSING',
         attempts = event.attempts + 1,
-        "lockedBy" = ${workerId},
+        "lockedBy" = ${claimToken},
         "leaseUntil" = NOW() + (${leaseSeconds} * INTERVAL '1 second')
     FROM candidate
     WHERE event.id = candidate.id
     RETURNING event.id, event."eventType", event."aggregateId", event."correlationId",
-              event."schemaVersion", event.payload, event.attempts
+              event."schemaVersion", event.payload, event.attempts, event."lockedBy" AS "claimToken"
   `);
   return rows[0] ?? null;
 }
 
-async function markPublished(prisma: PrismaClient, id: string, workerId: string): Promise<void> {
+async function markPublished(prisma: PrismaClient, id: string, claimToken: string): Promise<void> {
   const result = await prisma.outboxEvent.updateMany({
-    where: { id, status: "PROCESSING", lockedBy: workerId },
+    where: { id, status: "PROCESSING", lockedBy: claimToken },
     data: { status: "PUBLISHED", publishedAt: new Date(), leaseUntil: null, lockedBy: null, lastError: null },
   });
   if (result.count !== 1) throw new Error("OUTBOX_LEASE_LOST");
@@ -83,11 +86,11 @@ export function sanitizeOutboxError(error: unknown): string {
     .slice(0, 2000);
 }
 
-async function markFailed(prisma: PrismaClient, message: OutboxMessage, options: WorkerOptions, error: unknown): Promise<void> {
+async function markFailed(prisma: PrismaClient, message: ClaimedOutboxMessage, options: WorkerOptions, error: unknown): Promise<void> {
   const dead = message.attempts >= (options.maxAttempts ?? 8);
   const detail = sanitizeOutboxError(error);
   const result = await prisma.outboxEvent.updateMany({
-    where: { id: message.id, status: "PROCESSING", lockedBy: options.workerId.trim() },
+    where: { id: message.id, status: "PROCESSING", lockedBy: message.claimToken },
     data: {
       status: dead ? "DEAD_LETTER" : "PENDING",
       availableAt: new Date(Date.now() + retryDelaySeconds(message.attempts, options.baseRetrySeconds) * 1000),
@@ -106,8 +109,9 @@ export async function processOneOutboxMessage(
   const message = await claimOutboxMessage(prisma, normalizedOptions);
   if (!message) return "IDLE";
   try {
-    await handler(message);
-    await markPublished(prisma, message.id, workerId);
+    const { claimToken, ...publicMessage } = message;
+    await handler(publicMessage);
+    await markPublished(prisma, message.id, claimToken);
     return "PUBLISHED";
   } catch (error) {
     if (error instanceof Error && error.message === "OUTBOX_LEASE_LOST") throw error;
@@ -136,10 +140,11 @@ export async function processOneOutboxMessageWithInbox(
   if (!message) return "IDLE";
 
   try {
+    const { claimToken, ...publicMessage } = message;
     await prisma.$transaction((tx) =>
-      processOutboxEventInTransaction(tx, consumerName, message, handler),
+      processOutboxEventInTransaction(tx, consumerName, publicMessage, handler),
     );
-    await markPublished(prisma, message.id, workerId);
+    await markPublished(prisma, message.id, claimToken);
     return "PUBLISHED";
   } catch (error) {
     if (error instanceof Error && error.message === "OUTBOX_LEASE_LOST") throw error;
