@@ -99,3 +99,5 @@ ALTER TABLE "DealReview" ADD CONSTRAINT "DealReview_tenantId_fkey"
   FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "DealReview" ADD CONSTRAINT "DealReview_candidateId_fkey"
   FOREIGN KEY ("candidateId") REFERENCES "DealCandidate"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "DealReview" ADD CONSTRAINT "DealReview_reviewerUserId_fkey"
+  FOREIGN KEY ("reviewerUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
