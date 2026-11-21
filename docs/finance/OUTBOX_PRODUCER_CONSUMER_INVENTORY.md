@@ -41,3 +41,37 @@ Do not create a financial consumer or delivery mapping until those decisions are
 ## Explicit non-claims
 
 This audit does not establish that a consumer is deployed, that events are being processed end-to-end, or that any financial journal posting occurs. No schema or runtime code was changed by this inventory.
+
+
+## Erweiterter Audit: Agent-Task-Produzenten
+
+Zusätzliche Treffer der GitHub-Code-Suche (Default-Branch-Index; Quellpfade anschließend auf dem Finance-Branch geprüft):
+
+| Event type | Producer | Transaktion | Payload / tenant context |
+|---|---|---|---|
+| `agent.task.created` | `createAgentTask` in `services/api/src/agent-task-service.ts` | AgentTask-Erstellung + Event in derselben Prisma-Transaktion | taskId, taskType, ownerId; tenantId fehlt im Event-Payload |
+| `agent.task.started` | `claimAgentTask` | Claim/Statuswechsel + Event in derselben Prisma-Transaktion | taskId, workerId, attempt; tenantId fehlt im Event-Payload |
+| `agent.task.checkpointed` | `saveTaskCheckpoint` | Checkpoint-Update + Event in derselben Prisma-Transaktion | taskId; tenantId fehlt im Event-Payload |
+| `agent.task.succeeded` | `completeAgentTask` | Abschluss + Event in derselben Prisma-Transaktion | taskId; tenantId fehlt im Event-Payload |
+| `agent.task.retry_scheduled` | `failAgentTask`, außerdem Lease-Recovery | Task-Update + Event in derselben Transaktion | taskId, error, attempt, availableAt; tenantId fehlt im Event-Payload |
+| `agent.task.failed` | `failAgentTask`, außerdem Lease-Recovery | Task-Update + Event in derselben Transaktion | taskId, error, attempt, availableAt; tenantId fehlt im Event-Payload |
+| `agent.task.cancelled` | `cancelAgentTask` | Abbruch + Event in derselben Prisma-Transaktion | taskId; tenantId fehlt im Event-Payload |
+| `hidden_treasure.analysis.requested` | direkte Erstellung in `services/api/src/app.ts` | AgentTask-Erstellung + Event in derselben Prisma-Transaktion | taskId, taskType; tenantId fehlt im Event-Payload |
+
+Die acht Task-Event-Typen oben sind aus dem geprüften Service-Code abgeleitet; `retry_scheduled` und `failed` haben zwei Erzeugungspfade. Der direkte Treasure-Analysis-Endpunkt verwendet aktuell einen eigenen Event-Schreibpfad statt `enqueueOutboxEvent`.
+
+### Multi-Tenant-Befund
+
+Die Task-Events tragen die Task-ID als Aggregate-ID und können über die AgentTask-Tabelle einem Tenant zugeordnet werden. Der Event-Payload selbst enthält tenantId jedoch nicht. Für spätere fan-out-Zustellung darf die Tenant-Zuordnung daher nicht aus frei veränderbarem Payload allein abgeleitet werden. Die Recipient-Auflösung muss die referenzierte AgentTask serverseitig laden und die Tenant-Zugehörigkeit aus der autoritativen Datenbankzeile übernehmen. Die direkte Treasure-Analysis-Erzeugung setzt tenantId am AgentTask, lässt es aber im Outbox-Payload weg.
+
+### Consumer- und Laufzeitstatus
+
+Die Code-Suche fand keine belastbare produktive Registrierung über `OutboxConsumerRegistry.register` und keine sichtbare Instanzierung der Registry. Im geprüften Quellumfang sind deshalb keine konkreten fachlichen Event-Consumer bestätigt. `processOneOutboxMessage` und der Inbox-Helper sind generische Infrastruktur; das ist kein Beleg für einen laufenden Event-Dispatcher. Der Agent-Task-Worker verarbeitet AgentTask-Zeilen direkt und ist nicht automatisch ein Consumer dieser Outbox-Events.
+
+### Konsequenz vor Fan-out
+
+- Für jeden Event-Typ einen Owner und Zweck festlegen.
+- Tenant-ID bei Recipient-Erzeugung aus AgentTask bzw. WalletAccount laden, nicht ungeprüft aus Payload übernehmen.
+- Für Task-Lifecycle-Events prüfen, ob sie überhaupt Fan-out benötigen; viele sind Audit-/Telemetry-Signale und können ohne Consumer bleiben.
+- `hidden_treasure.analysis.requested` und AgentTask-Queueing nicht doppelt auslösen: vorhandener Worker pollt AgentTask-Status direkt.
+- Erst einen nichtfinanziellen, explizit aktivierten Consumer mit DB-only Effekt wählen und per Shadow-Mode testen.
