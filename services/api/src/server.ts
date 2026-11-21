@@ -2,6 +2,9 @@ import { PrismaClient } from "@prisma/client";
 import { buildServer } from "./app.js";
 import { config } from "./config.js";
 import { createHttpVisionInspector, type VisionInspector } from "./vision-inspector.js";
+import { createListingDatabase } from "./db/index.js";
+import { createProviderListingStore } from "./listing-service.js";
+import { createConfiguredProviderRegistry } from "./providers/bootstrap.js";
 
 /**
  * The inspection route stays at 503 VISION_INSPECTOR_NOT_CONFIGURED until both
@@ -24,10 +27,19 @@ function visionInspectorFromEnv(): VisionInspector | undefined {
 }
 
 const prisma = new PrismaClient();
+const listingDatabase = process.env.DATABASE_URL
+  ? createListingDatabase(process.env.DATABASE_URL)
+  : undefined;
 const app = await buildServer({
   prisma,
   authSigningSecret: process.env.AUTH_SIGNING_SECRET,
   visionInspector: visionInspectorFromEnv(),
+  listingStore: listingDatabase ? createProviderListingStore(listingDatabase.db) : undefined,
+  providers: createConfiguredProviderRegistry(),
+});
+app.addHook("onClose", async () => {
+  await listingDatabase?.close();
+  await prisma.$disconnect();
 });
 
 try {

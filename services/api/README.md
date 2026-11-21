@@ -46,13 +46,13 @@ The API now has a typed provider contract and an explicit capability registry fo
 
 A reusable circuit breaker protects calls in one API process. It opens after a configurable failure threshold, rejects requests while open, permits one probe after cooldown, and closes again after a successful probe. Its state is in-memory and is not coordinated across replicas; production multi-instance deployments need shared provider-health coordination and bounded request timeouts.
 
-No marketplace adapter is connected by this change. The contract deliberately exposes no purchase, payment, listing-publication, or order-modification method. A provider appearing in the registry must never be presented as a live integration unless its official API, authentication, capability scope, and health are independently verified. Keep PAPER mode as the only supported operating mode.
+The read-only eBay Browse adapter is registered only when both `EBAY_CLIENT_ID` and `EBAY_CLIENT_SECRET` are present in the API environment. It uses eBay's application OAuth flow and fixed `EBAY_DE` marketplace by default; credentials never reach the mobile app. `POST /v1/listings/search` returns only fixed-price EUR offers and upserts them into `ProviderListing` for the authenticated user. `GET /v1/listings` reads that user's saved offers. The provider contract still exposes no purchase, payment, listing-publication, or order-modification method, and PAPER mode remains the only supported operating mode.
 
 ### Outbound provider HTTP boundary
 
 `ProviderHttpClient` is a JSON-only GET client for future read-only adapters. It requires an HTTPS base URL and an exact hostname allowlist supplied by trusted server configuration, rejects paths outside the configured base path, rejects redirects, applies a bounded timeout and response-size limit, and accepts an optional server-side bearer token. It never accepts credentials from mobile requests. Provider adapters must still validate and normalize the returned JSON against provider-specific schemas before using it.
 
-This is transport hardening, not a marketplace integration. No provider host is configured, no secret is provisioned, and no external marketplace request is made by the application at this stage. The response size limit is enforced while streaming the response body, before the full payload is buffered. A declared content length is also checked early. Keep an independent egress/proxy limit in production as defense in depth.
+This client remains a generic configurable-catalog transport and is not used for eBay, whose adapter uses fixed official eBay OAuth and Browse API endpoints. The response size limit is enforced while streaming the generic client body, before the full payload is buffered. A declared content length is also checked early. Keep an independent egress/proxy limit in production as defense in depth.
 
 
 ### Server-side provider configuration
@@ -64,7 +64,7 @@ This is transport hardening, not a marketplace integration. No provider host is 
 
 The loader rejects partial configuration, non-HTTPS endpoints, host mismatches, wildcard hosts, URL credentials/query/fragment, and malformed provider IDs. When no provider variables exist, the provider is returned as disabled. Never serialize the resulting config object, log it, expose it in API responses, or pass it to the mobile application because it may contain a credential. Supply secrets through the deployment platform's secret manager/environment injection; do not commit real values or place them in `EXPO_PUBLIC_*` variables.
 
-This remains configuration plumbing only: no marketplace provider has been selected or connected, and no network request is made during configuration loading. A real adapter must be implemented against a named provider's official read API, validate provider responses, and declare only capabilities actually supported by that API.
+This remains configuration plumbing for the generic catalog provider; it is separate from the eBay adapter. The eBay provider is registered only when its server-side application credentials are present. Loading configuration performs no network request; eBay is contacted only when an authenticated user explicitly submits a search.
 
 
 ### Generic read-only Catalog REST adapter
@@ -139,6 +139,8 @@ These are internal service primitives only. No login, refresh, logout, or deal-r
 | `POST /v1/auth/refresh` | refresh token | One-time rotation; reuse of a rotated token returns 401 |
 | `POST /v1/auth/logout` | refresh token | Revokes the presented refresh session, 204 |
 | `GET /v1/deals` | any authenticated role | Review queue with `reviewStatus`, `riskPassed` and `limit` (1..100) filters |
+| `GET /v1/listings` | any authenticated role | Saved provider offers scoped to the signed-in user |
+| `POST /v1/listings/search` | any authenticated role | Read-only fixed-price eBay search, EUR only; persists results under the signed-in user |
 | `POST /v1/deals/:dealId/review` | ADMIN only | `APPROVED`, `REJECTED` or `ARCHIVED`; 422 for simulated or risk-failing approval, 409 on a concurrent or repeated decision |
 
 Access control is enforced per request: `authenticateBearerToken` verifies the signature and then reloads the user's role and `disabledAt` from PostgreSQL, so a role change or a disabled account takes effect without waiting for the token to expire. Cent amounts are serialized as strings to keep them JSON-safe.

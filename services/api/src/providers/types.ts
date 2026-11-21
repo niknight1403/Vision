@@ -27,6 +27,7 @@ export interface ProviderProduct {
   externalId: string;
   title: string;
   url: string;
+  imageUrl?: string;
   currency: string;
   priceMinor: number;
   observedAt: string;
