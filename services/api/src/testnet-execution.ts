@@ -99,6 +99,25 @@ export function evaluateKillSwitch(scopes: readonly { scope: KillSwitchScope; st
   return blocking ? { acceptsNewOrders: false, reason: `KILL_SWITCH_${blocking.scope}_${blocking.state}` } : { acceptsNewOrders: true, reason: "ALL_SCOPES_ARMED" };
 }
 
+/** Strict loader boundary: missing, duplicate, unknown, future-dated, or blocked scopes fail closed. */
+export function validateKillSwitchScopes(
+  scopes: readonly { scope: KillSwitchScope; state: KillSwitchState; updatedAt?: string }[],
+  expectedScopes: readonly KillSwitchScope[] = ["GLOBAL", "PROVIDER", "ACCOUNT", "STRATEGY"],
+  now = new Date().toISOString(),
+): void {
+  const expected = new Set(expectedScopes);
+  if (expected.size !== expectedScopes.length || expected.size === 0 || scopes.length !== expected.size ||
+      scopes.some((item) => !expected.has(item.scope)) || new Set(scopes.map((item) => item.scope)).size !== scopes.length) {
+    throw new Error("KILL_SWITCH_SCOPE_SET_INVALID");
+  }
+  for (const item of scopes) {
+    if (item.updatedAt !== undefined && (!Number.isFinite(Date.parse(item.updatedAt)) || Date.parse(item.updatedAt) > Date.parse(now))) {
+      throw new Error("KILL_SWITCH_SCOPE_TIMESTAMP_INVALID");
+    }
+    if (item.state !== "ARMED") throw new Error(`KILL_SWITCH_${item.scope}_${item.state}`);
+  }
+}
+
 export function evaluateExecutionGate(input: { intent: OrderIntent; capabilities: readonly ProviderCapability[]; killSwitches: readonly { scope: KillSwitchScope; state: KillSwitchState }[]; now: string; emergencyStop: boolean }): { allowed: true } {
   if (input.emergencyStop) throw new Error("EMERGENCY_STOP_ACTIVE");
   if (input.intent.environment !== "TESTNET") throw new Error("TESTNET_ENVIRONMENT_REQUIRED");
