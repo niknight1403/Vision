@@ -70,7 +70,7 @@ export async function claimOutboxMessage(prisma: PrismaClient, options: WorkerOp
 
 async function markPublished(prisma: PrismaClient, id: string, claimToken: string): Promise<void> {
   const result = await prisma.outboxEvent.updateMany({
-    where: { id, status: "PROCESSING", lockedBy: claimToken },
+    where: { id, status: "PROCESSING", lockedBy: claimToken, leaseUntil: { gt: new Date() } },
     data: { status: "PUBLISHED", publishedAt: new Date(), leaseUntil: null, lockedBy: null, lastError: null },
   });
   if (result.count !== 1) throw new Error("OUTBOX_LEASE_LOST");
@@ -90,7 +90,7 @@ async function markFailed(prisma: PrismaClient, message: ClaimedOutboxMessage, o
   const dead = message.attempts >= (options.maxAttempts ?? 8);
   const detail = sanitizeOutboxError(error);
   const result = await prisma.outboxEvent.updateMany({
-    where: { id: message.id, status: "PROCESSING", lockedBy: message.claimToken },
+    where: { id: message.id, status: "PROCESSING", lockedBy: message.claimToken, leaseUntil: { gt: new Date() } },
     data: {
       status: dead ? "DEAD_LETTER" : "PENDING",
       availableAt: new Date(Date.now() + retryDelaySeconds(message.attempts, options.baseRetrySeconds) * 1000),

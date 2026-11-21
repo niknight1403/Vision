@@ -356,3 +356,10 @@ This verifies the expired-lease recovery contention boundary using PostgreSQL ro
 PostgreSQL integration coverage now holds an earlier worker attempt until its lease expires, lets the same worker identity reclaim the event with a fresh claim token, then makes the stale handler fail. Its retry/dead-letter update must return OUTBOX_LEASE_LOST and leave the replacement PROCESSING lease, attempt count, and lastError untouched. The replacement worker then publishes successfully.
 
 This complements stale-success acknowledgement coverage: both success and failure paths must prove ownership with the exact per-claim token. No new financial workflow or external side effect is introduced.
+
+
+## Sprint 3.34 — reject acknowledgements after lease expiry
+
+Outbox publication acknowledgements and failure/retry updates now require both the exact per-claim token and an unexpired lease at the time of the database update. A handler that finishes after its lease deadline can no longer publish or schedule a retry, even if no replacement worker has claimed the event yet.
+
+PostgreSQL integration coverage exercises both late success and late failure. Each stale attempt must return OUTBOX_LEASE_LOST and leave the expired PROCESSING record untouched for recovery by a subsequent claimant. This tightens database lease ownership; it does not cancel an already-running handler or make remote side effects exactly-once.

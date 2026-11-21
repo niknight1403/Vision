@@ -297,6 +297,79 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(current.lastError).toBeNull();
   });
 
+  it("rejects a successful handler acknowledgement after its lease expires", async () => {
+    const aggregateId = `outbox-expired-success-lease-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.lease.expired-success",
+      aggregateId,
+      payload: { test: true },
+    } });
+    let entered!: () => void;
+    let release!: () => void;
+    const handlerEntered = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const worker = processOneOutboxMessage(
+      prisma,
+      { workerId: "worker-expired-success", leaseSeconds: 5, eventTypes: ["test.lease.expired-success"] },
+      async () => { entered(); await gate; },
+    );
+    try {
+      await handlerEntered;
+      await prisma.outboxEvent.updateMany({
+        where: { id: event.id, status: "PROCESSING" },
+        data: { leaseUntil: new Date(Date.now() - 1_000) },
+      });
+      release();
+      await expect(worker).rejects.toThrow("OUTBOX_LEASE_LOST");
+    } finally {
+      release();
+      await worker.catch(() => undefined);
+    }
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("PROCESSING");
+    expect(current.lockedBy).toContain("worker-expired-success:");
+    expect(current.leaseUntil?.getTime()).toBeLessThan(Date.now());
+    expect(current.publishedAt).toBeNull();
+  });
+
+  it("does not schedule a retry after a failed handler's lease expires", async () => {
+    const aggregateId = `outbox-expired-failure-lease-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.lease.expired-failure",
+      aggregateId,
+      payload: { test: true },
+    } });
+    let entered!: () => void;
+    let release!: () => void;
+    const handlerEntered = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const worker = processOneOutboxMessage(
+      prisma,
+      { workerId: "worker-expired-failure", leaseSeconds: 5, eventTypes: ["test.lease.expired-failure"] },
+      async () => { entered(); await gate; throw new Error("late handler failure"); },
+    );
+    try {
+      await handlerEntered;
+      await prisma.outboxEvent.updateMany({
+        where: { id: event.id, status: "PROCESSING" },
+        data: { leaseUntil: new Date(Date.now() - 1_000) },
+      });
+      release();
+      await expect(worker).rejects.toThrow("OUTBOX_LEASE_LOST");
+    } finally {
+      release();
+      await worker.catch(() => undefined);
+    }
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("PROCESSING");
+    expect(current.lockedBy).toContain("worker-expired-failure:");
+    expect(current.leaseUntil?.getTime()).toBeLessThan(Date.now());
+    expect(current.lastError).toBeNull();
+    expect(current.attempts).toBe(1);
+  });
+
   it("releases its own failed lease and schedules a retry", async () => {
     const aggregateId = `outbox-retry-${process.pid}-${Date.now()}`;
     aggregateIds.push(aggregateId);
