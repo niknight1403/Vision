@@ -1,5 +1,6 @@
 import { loadProviderRuntimeConfig } from "./provider-config.js";
 import { CatalogRestAdapter } from "./catalog-rest-adapter.js";
+import { createEbayBrowseAdapterFromEnv } from "./ebay-browse-adapter.js";
 import { ProviderRegistry } from "./registry.js";
 
 /**
@@ -14,5 +15,7 @@ export function createConfiguredProviderRegistry(
   if (catalogConfig.enabled) {
     registry.register(new CatalogRestAdapter(catalogConfig, "Configured catalog provider"));
   }
+  const ebayAdapter = createEbayBrowseAdapterFromEnv(env);
+  if (ebayAdapter) registry.register(ebayAdapter);
   return registry;
 }

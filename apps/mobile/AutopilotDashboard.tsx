@@ -6,6 +6,7 @@ import {
 import { StatusBar } from "expo-status-bar";
 import useSWR from "swr";
 import DemoAutopilotScreen from "./DemoAutopilotScreen";
+import EbayListingsSection from "./EbayListingsSection";
 import { clearStoredRefreshToken, readStoredRefreshToken, storeRefreshToken } from "./mobileSession";
 import { PAPER_BUILD_GUARDRAILS, PAPER_BUILD_MARKER } from "./paperBuild";
 
@@ -73,7 +74,7 @@ type AuthTokenPair = {
 };
 type ApiRequestInit = { method?: string; headers?: Record<string, string>; body?: string };
 type AuthenticatedFetch = (url: string, init?: ApiRequestInit) => Promise<Response>;
-type AppSection = "demo" | "vision";
+type AppSection = "listings" | "demo" | "vision";
 
 const ACTIVE_TASK_STATUSES = new Set(["QUEUED", "RUNNING", "CHECKPOINTED"]);
 const isActiveTask = (status: string) => ACTIVE_TASK_STATUSES.has(status);
@@ -176,7 +177,7 @@ function TaskResult({ task, authenticatedFetch }: { task: Task; authenticatedFet
 }
 
 export default function AutopilotDashboard() {
-  const [activeSection, setActiveSection] = useState<AppSection>("demo");
+  const [activeSection, setActiveSection] = useState<AppSection>("listings");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -368,13 +369,19 @@ export default function AutopilotDashboard() {
       <ScrollView contentContainerStyle={styles.container}>
         <Text style={styles.eyebrow}>AUTONOMAGENT / PAPER WORKSPACE</Text>
         <Text style={styles.heading}>Produkte sicher prüfen</Text>
-        <Text style={styles.intro}>Beispielprodukte lokal bewerten oder – mit verbundenem Backend – Kandidaten durch die Vision-Spezialisten analysieren lassen.</Text>
+        <Text style={styles.intro}>Echte Festpreisangebote aus eBay finden, sicher in deinem Konto speichern und ausgewählte Produkte anschließend visuell prüfen.</Text>
         <View style={styles.safetyBanner} testID={PAPER_BUILD_MARKER}>
           <Text style={styles.safetyTitle}>{PAPER_BUILD_GUARDRAILS.tradingMode}-MODUS · KEINE KÄUFE</Text>
           <Text style={styles.muted}>Keine automatischen Gebote, Nachrichten, Zahlungen oder Veröffentlichungen.</Text>
         </View>
 
         <View style={styles.navigation}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: activeSection === "listings" }}
+            onPress={() => setActiveSection("listings")}
+            style={[styles.navigationButton, activeSection === "listings" && styles.navigationButtonActive]}
+          ><Text style={[styles.navigationText, activeSection === "listings" && styles.navigationTextActive]}>eBay-Angebote</Text></Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityState={{ selected: activeSection === "demo" }}
@@ -391,8 +398,8 @@ export default function AutopilotDashboard() {
 
         {activeSection === "demo" ? <DemoAutopilotScreen /> : !API_BASE_URL ? (
           <Panel>
-            <Text style={styles.panelTitle}>Vision-Backend nicht verbunden</Text>
-            <Text style={styles.bodyText}>Für Anmeldung und Bildanalyse muss EXPO_PUBLIC_API_URL auf die HTTPS-Adresse des API-Servers zeigen. Der lokale Demo-Pilot funktioniert unabhängig davon.</Text>
+            <Text style={styles.panelTitle}>Live-Backend nicht verbunden</Text>
+            <Text style={styles.bodyText}>Für eBay-Angebote, Anmeldung und Bildanalyse muss EXPO_PUBLIC_API_URL auf die erreichbare HTTPS-Adresse der API zeigen. Der lokale Demo-Pilot funktioniert unabhängig davon.</Text>
           </Panel>
         ) : (sessionLoading || Boolean(restoredSession && !accessToken)) && !accessToken ? (
           <Panel><View style={styles.progress}><ActivityIndicator color="#8DB5FF" /><Text style={styles.bodyText}>Gespeicherte Sitzung wird geprüft …</Text></View></Panel>
@@ -404,6 +411,11 @@ export default function AutopilotDashboard() {
             <ActionButton title={busy ? "Anmeldung läuft …" : "Sicher anmelden"} onPress={() => void signIn()} disabled={busy || !email.trim() || !password} />
             <Text style={styles.muted}>Das Refresh-Token wird auf iOS/Android sicher gespeichert. Im Web bleibt die Sitzung nur im Arbeitsspeicher.</Text>
           </Panel>
+        ) : activeSection === "listings" ? (
+          <>
+            <EbayListingsSection apiBaseUrl={API_BASE_URL} authenticatedFetch={authenticatedFetch} />
+            <ActionButton title="Abmelden" onPress={() => void signOut()} />
+          </>
         ) : (
           <>
             <View style={styles.rowBetween}>

@@ -1,8 +1,14 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { inArray } from "drizzle-orm";
 import { PrismaClient } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "./app.js";
 import { hashPassword } from "./auth-session-service.js";
+import { createListingDatabase } from "./db/index.js";
+import { providerListings } from "./db/schema.js";
+import { createProviderListingStore } from "./listing-service.js";
+import { ProviderRegistry } from "./providers/registry.js";
+import type { ProductSearchRequest, ProviderProduct } from "./providers/types.js";
 
 const databaseEnabled = Boolean(process.env.DATABASE_URL);
 const suite = describe.skipIf(!databaseEnabled);
@@ -13,6 +19,27 @@ const prisma = new PrismaClient();
 const createdUserIds: string[] = [];
 const createdDealIds: string[] = [];
 const createdTaskIds: string[] = [];
+const listingSearch = vi.fn(async (_request: ProductSearchRequest): Promise<readonly ProviderProduct[]> => [{
+  providerId: "ebay",
+  externalId: "integration-camera-1",
+  title: "Used camera",
+  url: "https://www.ebay.de/itm/integration-camera-1",
+  imageUrl: "https://i.ebayimg.com/images/integration-camera-1.jpg",
+  currency: "EUR",
+  priceMinor: 12_990,
+  observedAt: new Date().toISOString(),
+  simulated: false,
+}]);
+const listingProviders = new ProviderRegistry();
+listingProviders.register({
+  providerId: "ebay",
+  displayName: "eBay test adapter",
+  capabilities: ["PRODUCT_SEARCH"],
+  simulated: false,
+  healthCheck: async () => ({ status: "HEALTHY", checkedAt: new Date().toISOString() }),
+  searchProducts: listingSearch,
+});
+let listingDatabase: ReturnType<typeof createListingDatabase>;
 let app: FastifyInstance;
 let adminEmail: string;
 let viewerEmail: string;
@@ -64,7 +91,13 @@ async function login(email: string) {
 suite("authenticated deal review routes (RBAC)", () => {
   beforeAll(async () => {
     await prisma.$connect();
-    app = await buildServer({ prisma, authSigningSecret: SIGNING_SECRET });
+    listingDatabase = createListingDatabase(process.env.DATABASE_URL);
+    app = await buildServer({
+      prisma,
+      authSigningSecret: SIGNING_SECRET,
+      listingStore: createProviderListingStore(listingDatabase.db),
+      providers: listingProviders,
+    });
     await app.ready();
   });
 
@@ -74,6 +107,8 @@ suite("authenticated deal review routes (RBAC)", () => {
   });
 
   afterEach(async () => {
+    await listingDatabase.db.delete(providerListings)
+      .where(inArray(providerListings.userId, createdUserIds));
     await prisma.refreshSession.deleteMany({ where: { userId: { in: createdUserIds } } });
     await prisma.outboxEvent.deleteMany({ where: { aggregateId: { in: createdTaskIds } } });
     await prisma.agentTask.deleteMany({ where: { id: { in: createdTaskIds } } });
@@ -86,6 +121,7 @@ suite("authenticated deal review routes (RBAC)", () => {
 
   afterAll(async () => {
     await app?.close();
+    await listingDatabase?.close();
     await prisma.$disconnect();
   });
 
@@ -98,6 +134,49 @@ suite("authenticated deal review routes (RBAC)", () => {
     expect(response.statusCode).toBe(401);
     expect(response.json()).toEqual({ error: "INVALID_CREDENTIALS" });
     expect(await prisma.refreshSession.count({ where: { userId: { in: createdUserIds } } })).toBe(0);
+  });
+
+  it("searches eBay and persists listings only for the authenticated user", async () => {
+    listingSearch.mockClear();
+    const unauthorized = await app.inject({
+      method: "POST",
+      url: "/v1/listings/search",
+      payload: { query: "camera", limit: 5 },
+    });
+    expect(unauthorized.statusCode).toBe(401);
+
+    const viewer = await login(viewerEmail);
+    const search = await app.inject({
+      method: "POST",
+      url: "/v1/listings/search",
+      headers: { authorization: `Bearer ${viewer.accessToken}` },
+      payload: { query: " camera ", limit: 5 },
+    });
+    expect(search.statusCode).toBe(200);
+    expect(listingSearch).toHaveBeenCalledWith({ query: "camera", limit: 5, currency: "EUR" });
+    expect(search.json().listings[0]).toMatchObject({
+      providerId: "ebay",
+      title: "Used camera",
+      currency: "EUR",
+      priceMinor: "12990",
+    });
+
+    const viewerListings = await app.inject({
+      method: "GET",
+      url: "/v1/listings",
+      headers: { authorization: `Bearer ${viewer.accessToken}` },
+    });
+    expect(viewerListings.statusCode).toBe(200);
+    expect(viewerListings.json().listings).toHaveLength(1);
+
+    const admin = await login(adminEmail);
+    const adminListings = await app.inject({
+      method: "GET",
+      url: "/v1/listings",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(adminListings.statusCode).toBe(200);
+    expect(adminListings.json().listings).toEqual([]);
   });
 
   it("keeps the deal list closed without a bearer token", async () => {

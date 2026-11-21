@@ -7,6 +7,8 @@ import { config } from "./config.js";
 import { authenticateBearerToken, requireAdmin, type AuthenticatedPrincipal } from "./auth-service.js";
 import { loginWithPassword, revokeRefreshToken, rotateRefreshToken } from "./auth-session-service.js";
 import { listDealCandidates, reviewDealCandidate } from "./deal-candidate-service.js";
+import type { ProviderListingRecord, ProviderListingStore } from "./listing-service.js";
+import type { ProviderRegistry } from "./providers/registry.js";
 
 export interface ServerDependencies {
   prisma: PrismaClient;
@@ -17,6 +19,8 @@ export interface ServerDependencies {
   visionInspector?: {
     inspectItemVisuals(imageUrl: string, hintTitle: string): Promise<Record<string, unknown>>;
   };
+  listingStore?: ProviderListingStore;
+  providers?: ProviderRegistry;
 }
 
 type ReviewDecision = "APPROVED" | "REJECTED" | "ARCHIVED";
@@ -47,6 +51,16 @@ const STATUS_BY_ERROR: Readonly<Record<string, number>> = Object.freeze({
   VISION_WORKER_REJECTED: 502,
   VISION_WORKER_RESPONSE_INVALID: 502,
   VISION_IMAGE_URL_REQUIRED: 400,
+  LISTING_STORAGE_NOT_CONFIGURED: 503,
+  LISTING_LIMIT_INVALID: 400,
+  LISTING_QUERY_INVALID: 400,
+  LISTING_SEARCH_LIMIT_INVALID: 400,
+  EBAY_API_NOT_CONFIGURED: 503,
+  EBAY_RATE_LIMITED: 429,
+  EBAY_API_UNAVAILABLE: 502,
+  EBAY_SEARCH_FAILED: 502,
+  EBAY_RESPONSE_INVALID: 502,
+  EBAY_OAUTH_FAILED: 502,
   TREASURE_ANALYSIS_IDEMPOTENCY_REQUIRED: 400,
   TREASURE_ANALYSIS_IDEMPOTENCY_CONFLICT: 409,
   TREASURE_ANALYSIS_INPUT_INVALID: 400,
@@ -78,6 +92,21 @@ function serializeDeal(deal: DealCandidate) {
   };
 }
 
+function serializeListing(listing: ProviderListingRecord) {
+  return {
+    id: listing.id,
+    providerId: listing.providerId,
+    externalId: listing.externalId,
+    title: listing.title,
+    productUrl: listing.productUrl,
+    imageUrl: listing.imageUrl,
+    currency: listing.currency,
+    priceMinor: listing.priceMinor.toString(),
+    observedAt: listing.observedAt.toISOString(),
+    updatedAt: listing.updatedAt.toISOString(),
+  };
+}
+
 function errorCode(error: unknown): string {
   return error instanceof Error ? error.message : "INTERNAL_ERROR";
 }
@@ -88,7 +117,21 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
   const app = Fastify({ logger: process.env.NODE_ENV !== "test", requestIdHeader: "x-request-id" });
 
   await app.register(helmet);
-  await app.register(cors, { origin: false });
+  const allowedOrigins = new Set(
+    (process.env.API_ALLOWED_ORIGINS ?? "")
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+  );
+  if (process.env.NODE_ENV !== "production") {
+    allowedOrigins.add("http://localhost:8081");
+    allowedOrigins.add("http://127.0.0.1:8081");
+  }
+  await app.register(cors, {
+    origin(origin, callback) {
+      callback(null, origin === undefined || allowedOrigins.has(origin));
+    },
+  });
 
   function signingSecret(): string {
     if (!dependencies.authSigningSecret) throw new Error("AUTH_SIGNING_SECRET_NOT_CONFIGURED");
@@ -124,6 +167,46 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     tradingReady: false,
     note: "Health only. Trading endpoints are not implemented.",
   }));
+
+  app.get("/v1/listings", async (request, reply) => {
+    try {
+      const principal = await principalFrom(request);
+      if (!dependencies.listingStore) throw new Error("LISTING_STORAGE_NOT_CONFIGURED");
+      const query = request.query as Record<string, unknown>;
+      const limit = query.limit === undefined ? 50 : Number(query.limit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+        throw new Error("LISTING_LIMIT_INVALID");
+      }
+      const listings = await dependencies.listingStore.listForUser(principal.userId, limit);
+      return reply.code(200).send({ listings: listings.map(serializeListing) });
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
+
+  app.post("/v1/listings/search", async (request, reply) => {
+    try {
+      const principal = await principalFrom(request);
+      if (!dependencies.listingStore) throw new Error("LISTING_STORAGE_NOT_CONFIGURED");
+      const body = request.body as { query?: unknown; limit?: unknown } | undefined;
+      const query = typeof body?.query === "string" ? body.query.trim() : "";
+      if (!query || query.length > 200) throw new Error("LISTING_QUERY_INVALID");
+      const limit = body?.limit === undefined ? 30 : body.limit;
+      if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 50) {
+        throw new Error("LISTING_SEARCH_LIMIT_INVALID");
+      }
+      const hasEbay = dependencies.providers?.list().some(({ providerId }) => providerId === "ebay");
+      if (!hasEbay || !dependencies.providers) throw new Error("EBAY_API_NOT_CONFIGURED");
+      const provider = dependencies.providers.getForCapability("ebay", "PRODUCT_SEARCH");
+      if (!provider.searchProducts) throw new Error("EBAY_API_NOT_CONFIGURED");
+      const products = await provider.searchProducts({ query, limit, currency: "EUR" });
+      if (products.length > limit) throw new Error("EBAY_RESPONSE_INVALID");
+      const listings = await dependencies.listingStore.upsertForUser(principal.userId, products);
+      return reply.code(200).send({ listings: listings.map(serializeListing) });
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
 
   app.post("/v1/auth/login", async (request, reply) => {
     const body = request.body as { email?: unknown; password?: unknown } | undefined;
