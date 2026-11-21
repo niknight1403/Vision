@@ -238,3 +238,14 @@ The wallet-to-journal reconciliation integration test now snapshots the wallet r
 The outbox reconciliation integration test now exercises the bounded `since` + `limit` query against controlled PostgreSQL fixtures. It verifies stable ordering for equal timestamps, confirms the exact selected event is reported, and compares the persisted rows before and after both scans. The report continues to expose metadata only and never returns event payloads.
 
 These tests do not authorize journal posting, wallet repair, outbox lease reclamation, replay, or any external financial action.
+
+
+## Sprint 3.19 — wallet reconciliation tenant/owner isolation
+
+The PostgreSQL integration coverage now creates a real wallet under one tenant and verifies that the reconciliation entry point rejects both:
+- the same wallet ID paired with a different existing tenant ID; and
+- the same wallet ID and tenant paired with a different owner ID.
+
+The positive control confirms that the correct tenant/owner/account tuple still resolves the wallet. This closes a test-quality gap in the earlier negative case, which used an unknown wallet ID and therefore did not prove isolation against an existing record.
+
+The implementation remains unchanged: `reconcileWalletJournal` resolves the wallet with the complete `(id, tenantId, ownerId)` predicate, then scopes journal balance reads by tenant. No wallet, ledger, journal, or outbox mutation is added; no accounting mapping or payment lifecycle is enabled.
