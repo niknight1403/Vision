@@ -11,7 +11,7 @@ The outbox provides at-least-once delivery, not exactly-once delivery. A handler
 - `PUBLISHED`: terminal success; do not replay automatically.
 - `DEAD_LETTER`: retry budget exhausted; preserve payload and diagnostic for investigation.
 
-The worker uses bounded exponential backoff (default 5 seconds, capped at one hour) and a configurable attempt limit (default 8). Lease loss is surfaced as `OUTBOX_LEASE_LOST`; a stale worker must not overwrite the current owner's state.
+The worker uses bounded exponential backoff (default 5 seconds, capped at one hour) and a configurable attempt limit (default 8). The claim transaction enforces the same limit for both due `PENDING` events and expired `PROCESSING` leases: an event whose attempt budget was exhausted by repeated worker crashes is moved to `DEAD_LETTER` before another handler invocation. Lease loss is surfaced as `OUTBOX_LEASE_LOST`; a stale worker must not overwrite the current owner's state.
 
 ## Consumer schema compatibility
 
