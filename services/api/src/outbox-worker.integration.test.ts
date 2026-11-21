@@ -174,6 +174,31 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(current.attempts).toBe(1);
   });
 
+
+  it("dead-letters an exhausted inbox consumer failure without retaining its receipt or credentials", async () => {
+    const aggregateId = `outbox-inbox-dead-letter-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.inbox.worker.dead-letter", aggregateId, payload: { test: true },
+    } });
+    const result = await processOneOutboxMessageWithInbox(
+      prisma,
+      { workerId: "worker-inbox-dead-letter", maxAttempts: 1, eventTypes: ["test.inbox.worker.dead-letter"] },
+      "integration-dead-letter",
+      async () => { throw new Error("Authorization: Bearer test-token-123 api_key=sk-test-secret"); },
+    );
+    expect(result).toBe("DEAD_LETTER");
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("DEAD_LETTER");
+    expect(current.lockedBy).toBeNull();
+    expect(current.leaseUntil).toBeNull();
+    expect(current.lastError).toContain("Authorization: [REDACTED]");
+    expect(current.lastError).toContain("api_key=[REDACTED]");
+    expect(current.lastError).not.toContain("test-token-123");
+    expect(current.lastError).not.toContain("sk-test-secret");
+    expect(await prisma.outboxConsumerReceipt.count({ where: { eventId: event.id } })).toBe(0);
+  });
+
 });
 
 if (!databaseEnabled) {
