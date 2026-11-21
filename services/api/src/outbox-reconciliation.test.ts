@@ -35,8 +35,8 @@ describe("read-only outbox reconciliation", () => {
       event({ id: "unexpected", status: "PENDING", lockedBy: "worker-b", leaseUntil: null, publishedAt: null, availableAt: now }),
     ], {}, { now });
     expect(report.findings.map((finding) => [finding.eventId, finding.code])).toEqual([
-      ["incomplete", "PROCESSING_LEASE_INCOMPLETE"],
       ["expired", "EXPIRED_LEASE"],
+      ["incomplete", "PROCESSING_LEASE_INCOMPLETE"],
       ["unexpected", "UNEXPECTED_LOCK"],
     ]);
   });
@@ -48,8 +48,8 @@ describe("read-only outbox reconciliation", () => {
       event({ id: "old-pending", status: "PENDING", publishedAt: null, availableAt: new Date("2026-11-20T11:00:00.000Z") }),
     ], {}, { now, pendingWarningSeconds: 60 });
     expect(report.findings.map((finding) => [finding.eventId, finding.code])).toEqual([
-      ["no-published-at", "PUBLISHED_TIMESTAMP_MISSING"],
       ["dead", "DEAD_LETTER"],
+      ["no-published-at", "PUBLISHED_TIMESTAMP_MISSING"],
       ["old-pending", "PENDING_OVERDUE"],
     ]);
   });
@@ -76,5 +76,30 @@ describe("read-only outbox reconciliation", () => {
       .toThrow("INVALID_PENDING_WARNING_SECONDS");
     expect(() => reconcileOutboxEvents([], {}, { pendingWarningSeconds: Number.NaN }))
       .toThrow("INVALID_PENDING_WARNING_SECONDS");
+  });
+
+  it("returns identical findings for permuted events and consumer configuration", () => {
+    const eventA = event({ id: "event-a", publishedAt: null });
+    const eventB = event({ id: "event-b", publishedAt: null });
+    const first = reconcileOutboxEvents(
+      [eventB, eventA],
+      { "wallet.reservation.created": ["consumer-z", "consumer-a"] },
+      { now },
+    );
+    const second = reconcileOutboxEvents(
+      [eventA, eventB],
+      { "wallet.reservation.created": ["consumer-a", "consumer-z"] },
+      { now },
+    );
+
+    expect(first).toEqual(second);
+    expect(first.findings.map(({ eventId, code, consumerName }) => [eventId, code, consumerName ?? null])).toEqual([
+      ["event-a", "PUBLISHED_TIMESTAMP_MISSING", null],
+      ["event-a", "REQUIRED_RECEIPT_MISSING", "consumer-a"],
+      ["event-a", "REQUIRED_RECEIPT_MISSING", "consumer-z"],
+      ["event-b", "PUBLISHED_TIMESTAMP_MISSING", null],
+      ["event-b", "REQUIRED_RECEIPT_MISSING", "consumer-a"],
+      ["event-b", "REQUIRED_RECEIPT_MISSING", "consumer-z"],
+    ]);
   });
 });
