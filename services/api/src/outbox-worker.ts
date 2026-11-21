@@ -37,15 +37,35 @@ export async function claimOutboxMessage(prisma: PrismaClient, options: WorkerOp
   const leaseSeconds = options.leaseSeconds ?? 60;
   const workerId = validateWorkerOptions(options);
   if (!Number.isInteger(leaseSeconds) || leaseSeconds < 5 || leaseSeconds > 3600) throw new Error("INVALID_LEASE_SECONDS");
+  const maxAttempts = options.maxAttempts ?? 8;
   const eventTypeFilter = options.eventTypes?.length
     ? Prisma.sql`AND "eventType" IN (${Prisma.join(options.eventTypes)})`
     : Prisma.empty;
   const rows = await prisma.$queryRaw<OutboxMessage[]>(Prisma.sql`
-    WITH candidate AS (
+    WITH exhausted AS (
+      UPDATE "OutboxEvent"
+      SET status = 'DEAD_LETTER',
+          "lockedBy" = NULL,
+          "leaseUntil" = NULL,
+          "lastError" = COALESCE("lastError", 'Retry budget exhausted after worker lease expiry')
+      WHERE
+        (status = 'PENDING' AND attempts >= ${maxAttempts})
+        OR (
+          status = 'PROCESSING'
+          AND attempts >= ${maxAttempts}
+          AND ("leaseUntil" IS NULL OR "leaseUntil" < NOW())
+        )
+      RETURNING id
+    ),
+    candidate AS (
       SELECT id FROM "OutboxEvent"
       WHERE (
-        (status = 'PENDING' AND "availableAt" <= NOW())
-        OR (status = 'PROCESSING' AND ("leaseUntil" IS NULL OR "leaseUntil" < NOW()))
+        (status = 'PENDING' AND "availableAt" <= NOW() AND attempts < ${maxAttempts})
+        OR (
+          status = 'PROCESSING'
+          AND attempts < ${maxAttempts}
+          AND ("leaseUntil" IS NULL OR "leaseUntil" < NOW())
+        )
       )
       ${eventTypeFilter}
       ORDER BY "availableAt", "createdAt"
