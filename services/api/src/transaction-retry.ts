@@ -8,7 +8,11 @@ export type SerializableRetryOptions = {
 };
 
 function isSerializationConflict(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034";
+  if (error instanceof Prisma.PrismaClientKnownRequestError) return error.code === "P2034";
+  // Preserve retry behavior across Prisma client/runtime package boundaries,
+  // where instanceof may not match even though the documented error code does.
+  return typeof error === "object" && error !== null &&
+    "code" in error && (error as { code?: unknown }).code === "P2034";
 }
 
 /**
