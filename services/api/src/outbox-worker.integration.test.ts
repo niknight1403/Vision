@@ -192,7 +192,7 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(current.status).toBe("DEAD_LETTER");
     expect(current.lockedBy).toBeNull();
     expect(current.leaseUntil).toBeNull();
-    expect(current.lastError).toContain("Bearer [REDACTED]");
+    expect(current.lastError).toContain("Authorization: [REDACTED]");
     expect(current.lastError).toContain("api_key=[REDACTED]");
     expect(current.lastError).not.toContain("test-token-123");
     expect(current.lastError).not.toContain("sk-test-secret");
