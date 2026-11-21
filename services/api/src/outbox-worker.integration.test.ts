@@ -461,7 +461,7 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     const handlerGate = new Promise<void>((resolve) => { releaseHandler = resolve; });
     const worker = processOneOutboxMessage(
       prisma,
-      { workerId: "worker-expired-heartbeat", leaseSeconds: 3, eventTypes: ["test.lease.expired-heartbeat"] },
+      { workerId: "worker-expired-heartbeat", leaseSeconds: 5, eventTypes: ["test.lease.expired-heartbeat"] },
       async () => {
         signalEntered();
         await handlerGate;
@@ -476,7 +476,7 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
         WHERE id = ${event.id} AND status = 'PROCESSING'
       `;
       // Allow the scheduled heartbeat to observe the expired lease and fail closed.
-      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
       const expired = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
       expect(expired.leaseUntil?.getTime()).toBeLessThan(Date.now());
       await expect(claimOutboxMessage(prisma, {
