@@ -55,6 +55,7 @@ export async function claimOutboxMessage(prisma: PrismaClient, options: WorkerOp
           AND attempts >= ${maxAttempts}
           AND ("leaseUntil" IS NULL OR "leaseUntil" < NOW())
         )
+      ${eventTypeFilter}
       RETURNING id
     ),
     candidate AS (
