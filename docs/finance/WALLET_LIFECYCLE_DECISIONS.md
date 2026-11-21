@@ -384,3 +384,10 @@ PostgreSQL integration coverage reads the persisted retry deadline relative to `
 Both ordinary outbox handlers and transactional-inbox consumers now renew their claim lease while processing is still active. Renewal runs at one-third of the configured lease duration and uses PostgreSQL `NOW()`; it is fenced by the exact claim token and refuses to revive an already-expired or reclaimed lease. A renewal failure is surfaced as `OUTBOX_LEASE_LOST`, and the worker does not acknowledge or overwrite a replacement claim.
 
 The PostgreSQL integration test holds a handler beyond its original five-second lease, verifies that the lease deadline is extended while the handler is active, then verifies successful acknowledgement and lease cleanup. This reduces duplicate concurrent execution for long-running handlers but does not cancel a stalled handler, make remote side effects exactly-once, or replace downstream idempotency. Handler-level timeouts, cancellation, and provider idempotency remain separate operational requirements.
+
+## Sprint 3.38 — expired heartbeat recovery boundary
+
+- A heartbeat renewal is conditional on the original claim token and an unexpired PostgreSQL lease; an expired lease is never revived.
+- Integration coverage expires a running handler's lease, lets the heartbeat observe lease loss, permits a replacement claim, and verifies the stale handler cannot acknowledge the event.
+- This remains at-least-once delivery. Lease loss does not terminate arbitrary handler code or undo an external side effect already performed; handlers and providers still require idempotency.
+- No wallet/journal, payment, schema, or external financial workflow is enabled by this test-only checkpoint.
