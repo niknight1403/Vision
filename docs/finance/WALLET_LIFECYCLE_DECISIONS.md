@@ -293,3 +293,10 @@ This is test and documentation coverage only. It does not dispatch events, creat
 The pure outbox reconciliation classifier now treats the required-consumer list as a set while evaluating each published event. Repeated consumer names in configuration therefore produce one missing-receipt finding rather than duplicate diagnostics. A unit regression test covers duplicate and distinct required consumers and asserts the canonical output.
 
 This is diagnostic correctness hardening only. It does not alter event dispatch, consumer receipt persistence, wallet or journal state, payment behavior, or external effects.
+
+
+## Sprint 3.25 — PostgreSQL proof for duplicate consumer configuration
+
+The PostgreSQL integration suite now exercises duplicate required-consumer names through the database-backed reconciliation entry point. It asserts that each distinct missing consumer produces exactly one finding even when configuration repeats a consumer name, while a published timestamp remains valid.
+
+This is integration-test and documentation coverage only. It does not mutate event state beyond isolated fixture creation/cleanup, dispatch events, alter receipts, or change wallet, journal, payment, or external-effect behavior.
