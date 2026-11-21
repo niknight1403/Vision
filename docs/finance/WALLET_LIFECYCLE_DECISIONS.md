@@ -377,3 +377,10 @@ Retry scheduling initially remained application-computed and is completed by Spr
 The outbox worker now computes retry eligibility as PostgreSQL `NOW() + retry interval`, rather than persisting an application-host timestamp. Claim eligibility, lease creation, lease fencing, and retry availability therefore share the database clock domain. The exponential-backoff interval remains calculated from the configured attempt count and is bounded by the existing retry-delay policy.
 
 PostgreSQL integration coverage reads the persisted retry deadline relative to `NOW()` and verifies that the event becomes eligible in the expected future window. This removes host/database clock skew from retry scheduling; it does not change delivery semantics, external side effects, wallet/journal behavior, or payment workflows.
+
+
+## Sprint 3.37 — active outbox lease renewal
+
+Both ordinary outbox handlers and transactional-inbox consumers now renew their claim lease while processing is still active. Renewal runs at one-third of the configured lease duration and uses PostgreSQL `NOW()`; it is fenced by the exact claim token and refuses to revive an already-expired or reclaimed lease. A renewal failure is surfaced as `OUTBOX_LEASE_LOST`, and the worker does not acknowledge or overwrite a replacement claim.
+
+The PostgreSQL integration test holds a handler beyond its original five-second lease, verifies that the lease deadline is extended while the handler is active, then verifies successful acknowledgement and lease cleanup. This reduces duplicate concurrent execution for long-running handlers but does not cancel a stalled handler, make remote side effects exactly-once, or replace downstream idempotency. Handler-level timeouts, cancellation, and provider idempotency remain separate operational requirements.
