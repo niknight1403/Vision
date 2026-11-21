@@ -286,3 +286,10 @@ The PostgreSQL outbox reconciliation integration suite now creates a published e
 Together with the existing missing-receipt case, this covers both sides of the required-consumer check against PostgreSQL rather than only testing the pure classifier. The fixture is isolated and cleaned up by the integration suite.
 
 This is test and documentation coverage only. It does not dispatch events, create business effects, mutate wallet or journal state, or authorize external financial actions.
+
+
+## Sprint 3.24 — duplicate required-consumer configuration
+
+The pure outbox reconciliation classifier now treats the required-consumer list as a set while evaluating each published event. Repeated consumer names in configuration therefore produce one missing-receipt finding rather than duplicate diagnostics. A unit regression test covers duplicate and distinct required consumers and asserts the canonical output.
+
+This is diagnostic correctness hardening only. It does not alter event dispatch, consumer receipt persistence, wallet or journal state, payment behavior, or external effects.
