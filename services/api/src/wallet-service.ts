@@ -1,4 +1,6 @@
 import { Prisma, PrismaClient } from "@prisma/client";
+import { enqueueOutboxEvent } from "./outbox-service.js";
+import { runSerializableTransaction } from "./transaction-retry.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -40,15 +42,15 @@ async function snapshot(db: Db, input: Pick<ReserveFundsInput, "accountId" | "ow
  * Reserves available funds atomically. Call only from an authenticated,
  * server-authorized workflow. The caller must use a stable referenceId for retries.
  */
-export async function reserveFunds(
-  prisma: PrismaClient,
+export async function reserveFundsInTransaction(
+  tx: Prisma.TransactionClient,
   input: ReserveFundsInput,
 ): Promise<WalletSnapshot> {
   assertPositiveAmount(input.amountCents);
   if (!input.referenceId.trim()) throw new Error("REFERENCE_ID_REQUIRED");
   if (!input.ownerId.trim() || !input.tenantId.trim()) throw new Error("WALLET_OWNER_REQUIRED");
 
-  return prisma.$transaction(async (tx) => {
+  return (async () => {
     // Lock the account row so concurrent reservations cannot spend the same balance.
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id FROM "WalletAccount" WHERE id = ${input.accountId} AND "ownerId" = ${input.ownerId} AND "tenantId" = ${input.tenantId} FOR UPDATE
@@ -76,7 +78,7 @@ export async function reserveFunds(
       where: { id: account.id },
       data: { reservedCents: { increment: input.amountCents }, version: { increment: 1 } },
     });
-    await tx.walletLedger.create({
+    const ledgerEntry = await tx.walletLedger.create({
       data: {
         accountId: account.id,
         entryType: "RESERVATION",
@@ -86,8 +88,30 @@ export async function reserveFunds(
         description: input.description,
       },
     });
+    await enqueueOutboxEvent(tx, {
+      eventType: "wallet.reservation.created",
+      aggregateId: account.id,
+      correlationId: input.correlationId ?? input.referenceId,
+      schemaVersion: 1,
+      payload: {
+        tenantId: input.tenantId,
+        accountId: account.id,
+        ledgerEntryId: ledgerEntry.id,
+        referenceId: input.referenceId,
+        amountCents: input.amountCents.toString(),
+        currency: account.currency,
+        eventType: "RESERVATION",
+      },
+    });
     return snapshot(tx, input);
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  })();
+}
+
+export async function reserveFunds(
+  prisma: PrismaClient,
+  input: ReserveFundsInput,
+): Promise<WalletSnapshot> {
+  return runSerializableTransaction(prisma, (tx) => reserveFundsInTransaction(tx, input));
 }
 
 export type ReleaseFundsInput = {
@@ -99,11 +123,11 @@ export type ReleaseFundsInput = {
   reservationReferenceId: string;
   correlationId?: string;
   description: string;
-};
+}
 
-/** Releases a prior reservation; the source reservation must be identified explicitly. unique referenceId makes retries idempotent. */
-export async function releaseFunds(
-  prisma: PrismaClient,
+/** Releases part or all of a prior reservation; cumulative releases may never exceed the source amount. */
+export async function releaseFundsInTransaction(
+  tx: Prisma.TransactionClient,
   input: ReleaseFundsInput,
 ): Promise<WalletSnapshot> {
   assertPositiveAmount(input.amountCents);
@@ -111,7 +135,7 @@ export async function releaseFunds(
   if (!input.reservationReferenceId.trim()) throw new Error("RESERVATION_REFERENCE_REQUIRED");
   if (!input.ownerId.trim() || !input.tenantId.trim()) throw new Error("WALLET_OWNER_REQUIRED");
 
-  return prisma.$transaction(async (tx) => {
+  return (async () => {
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id FROM "WalletAccount" WHERE id = ${input.accountId} AND "ownerId" = ${input.ownerId} AND "tenantId" = ${input.tenantId} FOR UPDATE
     `;
@@ -132,8 +156,7 @@ export async function releaseFunds(
       where: { referenceId: input.reservationReferenceId },
     });
     if (!originalReservation || originalReservation.accountId !== input.accountId ||
-        originalReservation.entryType !== "RESERVATION" ||
-        originalReservation.amountCents !== input.amountCents) {
+        originalReservation.entryType !== "RESERVATION") {
       throw new Error("ORIGINAL_RESERVATION_NOT_FOUND_OR_MISMATCHED");
     }
     const priorReleases = await tx.walletLedger.aggregate({
@@ -155,7 +178,7 @@ export async function releaseFunds(
       where: { id: account.id },
       data: { reservedCents: { decrement: input.amountCents }, version: { increment: 1 } },
     });
-    await tx.walletLedger.create({
+    const ledgerEntry = await tx.walletLedger.create({
       data: {
         accountId: account.id,
         entryType: "RESERVATION_RELEASE",
@@ -166,6 +189,29 @@ export async function releaseFunds(
         description: input.description,
       },
     });
+    await enqueueOutboxEvent(tx, {
+      eventType: "wallet.reservation.released",
+      aggregateId: account.id,
+      correlationId: input.correlationId ?? input.referenceId,
+      schemaVersion: 1,
+      payload: {
+        tenantId: input.tenantId,
+        accountId: account.id,
+        ledgerEntryId: ledgerEntry.id,
+        referenceId: input.referenceId,
+        reservationReferenceId: input.reservationReferenceId,
+        amountCents: input.amountCents.toString(),
+        currency: account.currency,
+        eventType: "RESERVATION_RELEASE",
+      },
+    });
     return snapshot(tx, input);
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  })();
+}
+
+export async function releaseFunds(
+  prisma: PrismaClient,
+  input: ReleaseFundsInput,
+): Promise<WalletSnapshot> {
+  return runSerializableTransaction(prisma, (tx) => releaseFundsInTransaction(tx, input));
 }

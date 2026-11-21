@@ -67,6 +67,7 @@ model Tenant {
   wallets     WalletAccount[]
   agentTasks  AgentTask[]
   dealReviews DealReview[]
+  journalTransactions JournalTransaction[]
 }
 
 model TenantMembership {
@@ -151,6 +152,18 @@ model OutboxEvent {
 
   @@index([status, availableAt])
   @@index([leaseUntil])
+  consumerReceipts OutboxConsumerReceipt[]
+}
+
+model OutboxConsumerReceipt {
+  id           String      @id @default(cuid())
+  consumerName String      @db.VarChar(128)
+  eventId      String
+  processedAt  DateTime    @default(now())
+  event        OutboxEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
+
+  @@unique([consumerName, eventId])
+  @@index([consumerName, processedAt])
 }
 
 model IdempotencyKey {
@@ -382,4 +395,34 @@ model ReconciliationRun {
 
   @@index([providerId, accountId, startedAt])
   @@index([status, startedAt])
+}
+
+
+model JournalTransaction {
+  id          String         @id @default(cuid())
+  tenantId    String
+  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  referenceId String
+  currency    String         @db.VarChar(3)
+  description String
+  payloadHash String         @db.VarChar(64)
+  postedAt    DateTime?
+  createdAt   DateTime       @default(now())
+  entries     JournalEntry[]
+
+  @@unique([tenantId, referenceId])
+  @@index([tenantId, createdAt])
+}
+
+model JournalEntry {
+  id            String            @id @default(cuid())
+  transactionId String
+  transaction   JournalTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  accountCode   String            @db.VarChar(64)
+  debitCents    BigInt            @default(0)
+  creditCents   BigInt            @default(0)
+  createdAt     DateTime          @default(now())
+
+  @@index([transactionId])
+  @@index([accountCode, createdAt])
 }
