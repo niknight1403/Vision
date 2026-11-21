@@ -917,6 +917,76 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(row.leaseUntil).toBeNull();
   }, 15_000);
 
+
+  it("finishes a message whose database claim returned after shutdown was requested", async () => {
+    const aggregateId = `outbox-abort-during-claim-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({
+      data: {
+        eventType: "test.abort-during-claim",
+        aggregateId,
+        payload: { test: true },
+      },
+    });
+
+    const controller = new AbortController();
+    let signalClaimReturned!: () => void;
+    let releaseClaim!: () => void;
+    const claimReturned = new Promise<void>((resolve) => { signalClaimReturned = resolve; });
+    const claimGate = new Promise<void>((resolve) => { releaseClaim = resolve; });
+    let interceptedClaim = false;
+    const delayedPrisma = new Proxy(prisma, {
+      get(target, property) {
+        if (property === "$queryRaw") {
+          return async (...args: Parameters<PrismaClient["$queryRaw"]>) => {
+            const rows = await target.$queryRaw(...args);
+            if (!interceptedClaim) {
+              interceptedClaim = true;
+              signalClaimReturned();
+              await claimGate;
+            }
+            return rows;
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as PrismaClient;
+
+    let handlerCalls = 0;
+    const runner = runOutboxWorker(
+      delayedPrisma,
+      {
+        workerId: "worker-abort-during-claim",
+        leaseSeconds: 30,
+        eventTypes: ["test.abort-during-claim"],
+      },
+      async () => { handlerCalls += 1; },
+      { signal: controller.signal, pollIntervalMs: 50 },
+    );
+
+    try {
+      // The SQL claim has committed, but its result has not yet reached the worker.
+      await claimReturned;
+      controller.abort();
+      expect(handlerCalls).toBe(0);
+      releaseClaim();
+      await expect(runner).resolves.toEqual({ published: 1, retried: 0, deadLettered: 0 });
+    } finally {
+      controller.abort();
+      releaseClaim();
+      await runner.catch(() => undefined);
+    }
+
+    expect(interceptedClaim).toBe(true);
+    expect(handlerCalls).toBe(1);
+    const row = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(row.status).toBe("PUBLISHED");
+    expect(row.attempts).toBe(1);
+    expect(row.lockedBy).toBeNull();
+    expect(row.leaseUntil).toBeNull();
+  }, 15_000);
+
 });
 
 if (!databaseEnabled) {
