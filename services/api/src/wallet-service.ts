@@ -58,7 +58,7 @@ export async function reserveFundsInTransaction(
     if (rows.length === 0) throw new Error("WALLET_NOT_FOUND");
 
     const existing = await tx.walletLedger.findUnique({
-      where: { referenceId: input.referenceId },
+      where: { accountId_referenceId: { accountId: input.accountId, referenceId: input.referenceId } },
     });
     if (existing) {
       if (existing.accountId !== input.accountId ||
@@ -141,7 +141,9 @@ export async function releaseFundsInTransaction(
     `;
     if (rows.length === 0) throw new Error("WALLET_NOT_FOUND");
 
-    const existing = await tx.walletLedger.findUnique({ where: { referenceId: input.referenceId } });
+    const existing = await tx.walletLedger.findUnique({
+      where: { accountId_referenceId: { accountId: input.accountId, referenceId: input.referenceId } },
+    });
     if (existing) {
       if (existing.accountId !== input.accountId ||
           existing.entryType !== "RESERVATION_RELEASE" ||
@@ -153,7 +155,7 @@ export async function releaseFundsInTransaction(
     }
 
     const originalReservation = await tx.walletLedger.findUnique({
-      where: { referenceId: input.reservationReferenceId },
+      where: { accountId_referenceId: { accountId: input.accountId, referenceId: input.reservationReferenceId } },
     });
     if (!originalReservation || originalReservation.accountId !== input.accountId ||
         originalReservation.entryType !== "RESERVATION") {
@@ -161,6 +163,7 @@ export async function releaseFundsInTransaction(
     }
     const priorReleases = await tx.walletLedger.aggregate({
       where: {
+        accountId: input.accountId,
         entryType: "RESERVATION_RELEASE",
         reservationReferenceId: input.reservationReferenceId,
       },

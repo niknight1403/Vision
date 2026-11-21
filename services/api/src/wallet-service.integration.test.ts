@@ -114,7 +114,7 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     }, { baseDelayMs: 0 })).rejects.toThrow("FORCE_COMPOSED_TRANSACTION_ROLLBACK");
 
     expect((await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } })).reservedCents).toBe(0n);
-    expect(await prisma.walletLedger.count({ where: { referenceId: "wallet-journal-atomic-rollback" } })).toBe(0);
+    expect(await prisma.walletLedger.count({ where: { accountId, referenceId: "wallet-journal-atomic-rollback" } })).toBe(0);
     expect(await prisma.journalTransaction.count({ where: { tenantId, referenceId: "wallet-journal-atomic-rollback" } })).toBe(0);
     expect(await prisma.outboxEvent.count({ where: { correlationId: "wallet-journal-atomic-rollback" } })).toBe(0);
 
@@ -137,7 +137,7 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     }, { baseDelayMs: 0 });
 
     expect((await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } })).reservedCents).toBe(1_000n);
-    expect(await prisma.walletLedger.count({ where: { referenceId } })).toBe(1);
+    expect(await prisma.walletLedger.count({ where: { accountId, referenceId } })).toBe(1);
     expect(await prisma.journalTransaction.count({ where: { tenantId, referenceId } })).toBe(1);
     expect(await prisma.outboxEvent.count({ where: { correlationId: referenceId } })).toBe(2);
   });
@@ -176,7 +176,7 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     expect(first.reservedCents).toBe(0n);
     expect(retry.reservedCents).toBe(0n);
     expect(await prisma.walletLedger.count({ where: { accountId, entryType: "RESERVATION_RELEASE" } })).toBe(1);
-    const entry = await prisma.walletLedger.findUniqueOrThrow({ where: { referenceId: input.referenceId } });
+    const entry = await prisma.walletLedger.findUniqueOrThrow({ where: { accountId_referenceId: { accountId, referenceId: input.referenceId } } });
     expect(entry.reservationReferenceId).toBe("reservation-idempotent");
   });
 
@@ -287,7 +287,7 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
     const ledger = await prisma.walletLedger.findUniqueOrThrow({
-      where: { referenceId: common.referenceId },
+      where: { accountId_referenceId: { accountId, referenceId: common.referenceId } },
     });
     expect([1_500n, 2_000n]).toContain(ledger.amountCents);
     const wallet = await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } });
@@ -297,29 +297,58 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     })).toBe(1);
   });
 
-  it("rejects reuse of a wallet idempotency key across tenant accounts", async () => {
+  it("allows the same idempotency reference independently across tenant accounts", async () => {
     const otherTenant = await prisma.tenant.create({ data: { name: "Second wallet tenant" } });
+    const otherOwner = await prisma.user.create({ data: {
+      email: `wallet-second-isolation-${ownerSequence}@example.test`, passwordHash: "integration-test-hash",
+    } });
     const otherAccount = await prisma.walletAccount.create({
-      data: { ownerId: "second-tenant-owner", tenantId: otherTenant.id, currency: "EUR", balanceCents: 10_000n },
+      data: { ownerId: otherOwner.id, tenantId: otherTenant.id, currency: "EUR", balanceCents: 10_000n },
     });
-    const referenceId = "wallet-global-idempotency-scope";
+    const referenceId = "wallet-tenant-scoped-idempotency";
     try {
       await reserveFunds(prisma, {
         accountId, ...walletScope(), amountCents: 1_000n, referenceId,
         description: "first tenant reservation",
       });
+      await reserveFunds(prisma, {
+        accountId: otherAccount.id, ownerId: otherOwner.id, tenantId: otherTenant.id,
+        amountCents: 2_000n, referenceId, description: "second tenant reservation",
+      });
+      expect(await prisma.walletLedger.count({ where: { referenceId } })).toBe(2);
+      expect((await prisma.walletAccount.findUniqueOrThrow({ where: { id: otherAccount.id } })).reservedCents).toBe(2_000n);
       await expect(reserveFunds(prisma, {
-        accountId: otherAccount.id, ownerId: "second-tenant-owner", tenantId: otherTenant.id,
-        amountCents: 1_000n, referenceId, description: "second tenant reservation",
+        accountId: otherAccount.id, ownerId: otherOwner.id, tenantId: otherTenant.id,
+        amountCents: 3_000n, referenceId, description: "conflicting retry",
       })).rejects.toThrow("IDEMPOTENCY_CONFLICT");
-
-      expect(await prisma.walletLedger.count({ where: { referenceId } })).toBe(1);
-      expect((await prisma.walletAccount.findUniqueOrThrow({ where: { id: otherAccount.id } })).reservedCents).toBe(0n);
     } finally {
       await prisma.outboxEvent.deleteMany({ where: { aggregateId: otherAccount.id } });
       await prisma.walletLedger.deleteMany({ where: { accountId: otherAccount.id } });
       await prisma.walletAccount.delete({ where: { id: otherAccount.id } });
       await prisma.tenant.delete({ where: { id: otherTenant.id } });
+      await prisma.user.delete({ where: { id: otherOwner.id } });
+    }
+  });
+
+  it("cannot resolve a reservation reference from another wallet account", async () => {
+    await reserveFunds(prisma, {
+      accountId, ...walletScope(), amountCents: 1_000n, referenceId: "same-reference-source",
+      description: "source wallet reservation",
+    });
+    const otherAccount = await prisma.walletAccount.create({
+      data: { ownerId, tenantId, currency: "USD", balanceCents: 5_000n },
+    });
+    try {
+      await expect(releaseFunds(prisma, {
+        accountId: otherAccount.id, ...walletScope(), amountCents: 500n,
+        referenceId: "cross-account-release", reservationReferenceId: "same-reference-source",
+        description: "must not resolve another account source",
+      })).rejects.toThrow("ORIGINAL_RESERVATION_NOT_FOUND_OR_MISMATCHED");
+      expect((await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } })).reservedCents).toBe(1_000n);
+      expect((await prisma.walletAccount.findUniqueOrThrow({ where: { id: otherAccount.id } })).reservedCents).toBe(0n);
+    } finally {
+      await prisma.walletLedger.deleteMany({ where: { accountId: otherAccount.id } });
+      await prisma.walletAccount.delete({ where: { id: otherAccount.id } });
     }
   });
 
