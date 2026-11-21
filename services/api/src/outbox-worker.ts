@@ -69,11 +69,16 @@ export async function claimOutboxMessage(prisma: PrismaClient, options: WorkerOp
 }
 
 async function markPublished(prisma: PrismaClient, id: string, claimToken: string): Promise<void> {
-  const result = await prisma.outboxEvent.updateMany({
-    where: { id, status: "PROCESSING", lockedBy: claimToken, leaseUntil: { gt: new Date() } },
-    data: { status: "PUBLISHED", publishedAt: new Date(), leaseUntil: null, lockedBy: null, lastError: null },
-  });
-  if (result.count !== 1) throw new Error("OUTBOX_LEASE_LOST");
+  // Evaluate lease ownership against PostgreSQL's clock, matching claimOutboxMessage.
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    UPDATE "OutboxEvent"
+    SET status = 'PUBLISHED', "publishedAt" = NOW(), "leaseUntil" = NULL,
+        "lockedBy" = NULL, "lastError" = NULL
+    WHERE id = ${id} AND status = 'PROCESSING'
+      AND "lockedBy" = ${claimToken} AND "leaseUntil" > NOW()
+    RETURNING id
+  `);
+  if (rows.length !== 1) throw new Error("OUTBOX_LEASE_LOST");
 }
 
 export function sanitizeOutboxError(error: unknown): string {
@@ -89,15 +94,18 @@ export function sanitizeOutboxError(error: unknown): string {
 async function markFailed(prisma: PrismaClient, message: ClaimedOutboxMessage, options: WorkerOptions, error: unknown): Promise<void> {
   const dead = message.attempts >= (options.maxAttempts ?? 8);
   const detail = sanitizeOutboxError(error);
-  const result = await prisma.outboxEvent.updateMany({
-    where: { id: message.id, status: "PROCESSING", lockedBy: message.claimToken, leaseUntil: { gt: new Date() } },
-    data: {
-      status: dead ? "DEAD_LETTER" : "PENDING",
-      availableAt: new Date(Date.now() + retryDelaySeconds(message.attempts, options.baseRetrySeconds) * 1000),
-      leaseUntil: null, lockedBy: null, lastError: detail.slice(0, 2000),
-    },
-  });
-  if (result.count !== 1) throw new Error("OUTBOX_LEASE_LOST");
+  const availableAt = new Date(Date.now() + retryDelaySeconds(message.attempts, options.baseRetrySeconds) * 1000);
+  // Keep the ownership check on the database clock to avoid host clock skew.
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    UPDATE "OutboxEvent"
+    SET status = ${dead ? "DEAD_LETTER" : "PENDING"}::"OutboxStatus",
+        "availableAt" = ${availableAt}, "leaseUntil" = NULL,
+        "lockedBy" = NULL, "lastError" = ${detail.slice(0, 2000)}
+    WHERE id = ${message.id} AND status = 'PROCESSING'
+      AND "lockedBy" = ${message.claimToken} AND "leaseUntil" > NOW()
+    RETURNING id
+  `);
+  if (rows.length !== 1) throw new Error("OUTBOX_LEASE_LOST");
 }
 
 /** At-least-once delivery. Handlers must be idempotent across crash/retry boundaries. */
