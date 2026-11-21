@@ -56,13 +56,13 @@ Zusätzliche Treffer der GitHub-Code-Suche (Default-Branch-Index; Quellpfade ans
 | `agent.task.retry_scheduled` | `failAgentTask`, außerdem Lease-Recovery | Task-Update + Event in derselben Transaktion | taskId, error, attempt, availableAt; tenantId fehlt im Event-Payload |
 | `agent.task.failed` | `failAgentTask`, außerdem Lease-Recovery | Task-Update + Event in derselben Transaktion | taskId, error, attempt, availableAt; tenantId fehlt im Event-Payload |
 | `agent.task.cancelled` | `cancelAgentTask` | Abbruch + Event in derselben Prisma-Transaktion | taskId; tenantId fehlt im Event-Payload |
-| `hidden_treasure.analysis.requested` | direkte Erstellung in `services/api/src/app.ts` | AgentTask-Erstellung + Event in derselben Prisma-Transaktion | taskId, taskType; tenantId fehlt im Event-Payload |
+| `hidden_treasure.analysis.requested` | Treasure-Analysis-Route in `services/api/src/app.ts` via `enqueueOutboxEvent(tx, ...)` (aktueller PR-Head) | AgentTask-Erstellung + Event in derselben Prisma-Transaktion | taskId, taskType; tenantId fehlt im Event-Payload |
 
 Die acht Task-Event-Typen oben sind aus dem geprüften Service-Code abgeleitet; `retry_scheduled` und `failed` haben zwei Erzeugungspfade. Der Treasure-Analysis-Endpunkt verwendet auf dem aktuellen PR-Head den gemeinsamen Helper `enqueueOutboxEvent(tx, ...)` innerhalb derselben Transaktion wie die AgentTask-Erstellung.
 
 ### Multi-Tenant-Befund
 
-Die Task-Events tragen die Task-ID als Aggregate-ID und können über die AgentTask-Tabelle einem Tenant zugeordnet werden. Der Event-Payload selbst enthält tenantId jedoch nicht. Für spätere fan-out-Zustellung darf die Tenant-Zuordnung daher nicht aus frei veränderbarem Payload allein abgeleitet werden. Die Recipient-Auflösung muss die referenzierte AgentTask serverseitig laden und die Tenant-Zugehörigkeit aus der autoritativen Datenbankzeile übernehmen. Die direkte Treasure-Analysis-Erzeugung setzt tenantId am AgentTask, lässt es aber im Outbox-Payload weg.
+Die Task-Events tragen die Task-ID als Aggregate-ID und können über die AgentTask-Tabelle einem Tenant zugeordnet werden. Der Event-Payload selbst enthält tenantId jedoch nicht. Für spätere fan-out-Zustellung darf die Tenant-Zuordnung daher nicht aus frei veränderbarem Payload allein abgeleitet werden. Die Recipient-Auflösung muss die referenzierte AgentTask serverseitig laden und die Tenant-Zugehörigkeit aus der autoritativen Datenbankzeile übernehmen. Die Treasure-Analysis-Route setzt tenantId am AgentTask, lässt es aber im Outbox-Payload weg; der gemeinsame Producer-Helper ändert diesen Payload-Vertrag nicht.
 
 ### Consumer- und Laufzeitstatus
 
