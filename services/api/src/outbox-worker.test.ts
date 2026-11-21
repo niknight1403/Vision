@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { retryDelaySeconds, sanitizeOutboxError } from "./outbox-worker.js";
+import { retryDelaySeconds, runOutboxWorker, sanitizeOutboxError } from "./outbox-worker.js";
 
 describe("outbox retry policy", () => {
   it("uses bounded exponential backoff", () => {
