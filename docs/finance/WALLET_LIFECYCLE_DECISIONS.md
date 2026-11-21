@@ -342,3 +342,10 @@ This proves the database claim boundary for two concurrent workers against Postg
 Outbox claims now persist a unique per-claim token composed from the worker identity and a fresh UUID. A worker must present that exact token to acknowledge publication or schedule failure. Reusing a worker ID after a lease expires therefore cannot let an earlier, still-running attempt overwrite the newer claim.
 
 PostgreSQL integration coverage expires a live lease while its handler is held, reclaims it with the same worker ID, and proves the stale attempt receives OUTBOX_LEASE_LOST while the replacement claim remains PROCESSING. The replacement then completes publication. This is a database lease-fencing guarantee, not exactly-once delivery for remote effects.
+
+
+## Sprint 3.32 — single claimant for concurrent expired-lease recovery
+
+PostgreSQL integration coverage creates one PROCESSING event with an expired lease and races two independent claim attempts. Exactly one attempt must receive a claim token; the other must receive no event. The persisted attempt counter advances once, and the stored lease owner must equal the winning claim token with a future lease deadline.
+
+This verifies the expired-lease recovery contention boundary using PostgreSQL row locking. It adds test and documentation coverage only; no production behavior, schema, wallet/journal, payment, or external side effects are changed.
