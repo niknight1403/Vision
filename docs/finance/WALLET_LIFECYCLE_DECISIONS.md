@@ -259,3 +259,12 @@ The pure reconciliation tests now pin the time-boundary semantics:
 - A zero-second threshold reports an event that is already due, and non-finite thresholds are rejected.
 
 The PostgreSQL integration suite also verifies that the bounded outbox scan rejects zero, negative, fractional, and over-maximum limits, while accepting the configured maximum of 10,000. This is validation coverage only; the scan remains metadata-only and read-only. No worker lease, event status, payload, wallet, journal, or payment behavior is changed.
+
+
+## Sprint 3.21 — deterministic outbox reconciliation findings
+
+The pure outbox reconciliation function now sorts findings by event ID, finding code, and consumer name before returning the report. This makes report comparisons stable when the same event set is supplied in a different input order or required consumers are configured in a different order.
+
+A unit regression test permutes both event order and consumer configuration order, then asserts complete report equality and the canonical finding sequence. The database query continues to use its existing deterministic `createdAt ASC, id ASC` selection order; this sprint makes the pure report output deterministic independently of that query order.
+
+This is a diagnostic-output change only. It does not mutate outbox events, receipts, leases, wallet balances, ledger entries, journal postings, or payment state. No automatic replay, repair, financial posting, or external side effect is introduced.
