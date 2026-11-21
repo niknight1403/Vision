@@ -82,6 +82,47 @@ suite("outbox reconciliation (PostgreSQL)", () => {
     expect(receipt.consumerName).toBe("ledger-projection");
   });
 
+
+  it("deduplicates repeated required consumers through PostgreSQL reconciliation", async () => {
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.reconciliation.consumer.dedup",
+      aggregateId: `reconciliation-consumer-dedup-${process.pid}-${Date.now()}`,
+      payload: { marker: "dedup-fixture" },
+      status: "PUBLISHED",
+      publishedAt: new Date(),
+    } });
+    ids.push(event.id);
+
+    const report = await reconcileOutbox(prisma, {
+      expectedConsumers: {
+        "test.reconciliation.consumer.dedup": [
+          "ledger-projection", "ledger-projection", "audit",
+        ],
+      },
+    });
+
+    const findings = report.findings.filter((finding) =>
+      finding.eventId === event.id && finding.code === "REQUIRED_RECEIPT_MISSING");
+    expect(findings).toEqual([
+      {
+        code: "REQUIRED_RECEIPT_MISSING",
+        severity: "CRITICAL",
+        eventId: event.id,
+        eventType: "test.reconciliation.consumer.dedup",
+        consumerName: "audit",
+      },
+      {
+        code: "REQUIRED_RECEIPT_MISSING",
+        severity: "CRITICAL",
+        eventId: event.id,
+        eventType: "test.reconciliation.consumer.dedup",
+        consumerName: "ledger-projection",
+      },
+    ]);
+    expect(report.findings.some((finding) => finding.eventId === event.id &&
+      finding.code === "PUBLISHED_TIMESTAMP_MISSING")).toBe(false);
+  });
+
   it("applies since and limit deterministically and leaves selected events unchanged", async () => {
     const createdAt = new Date(Date.now() + 5_000);
     const fixtures = await prisma.outboxEvent.createManyAndReturn({
