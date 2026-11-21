@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { retryDelaySeconds } from "./outbox-worker.js";
+import { redactOutboxError, retryDelaySeconds } from "./outbox-worker.js";
 
 describe("outbox retry policy", () => {
   it("uses bounded exponential backoff", () => {
@@ -10,5 +10,10 @@ describe("outbox retry policy", () => {
   it("caps delay and guards extreme attempts", () => {
     expect(retryDelaySeconds(20, 5)).toBe(3600);
     expect(retryDelaySeconds(0, 5)).toBe(5);
+  });
+  it("redacts credentials and URLs from handler errors", () => {
+    const value = redactOutboxError(new Error("token=abc123 failed https://private.example/x"));
+    expect(value).not.toContain("abc123");
+    expect(value).not.toContain("private.example");
   });
 });

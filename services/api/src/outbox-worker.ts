@@ -12,6 +12,11 @@ export function retryDelaySeconds(attempt: number, baseSeconds = 5): number {
   return Math.min(3600, baseSeconds * 2 ** (n - 1));
 }
 
+export function redactOutboxError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : "Unknown handler error";
+  return raw.replace(/(authorization|token|secret|password|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]").replace(/https?:\/\/[^\s]+/gi, "[URL_REDACTED]").slice(0, 500);
+}
+
 export async function claimOutboxMessage(prisma: PrismaClient, options: WorkerOptions): Promise<OutboxMessage | null> {
   const leaseSeconds = options.leaseSeconds ?? 60;
   if (!options.workerId.trim()) throw new Error("WORKER_ID_REQUIRED");
@@ -33,7 +38,7 @@ async function markPublished(prisma: PrismaClient, id: string, workerId: string)
 
 async function markFailed(prisma: PrismaClient, message: OutboxMessage, options: WorkerOptions, error: unknown): Promise<void> {
   const dead = message.attempts >= (options.maxAttempts ?? 8);
-  const detail = error instanceof Error ? error.message : "Unknown handler error";
+  const detail = redactOutboxError(error);
   await prisma.outboxEvent.updateMany({
     where: { id: message.id, status: "PROCESSING", lockedBy: options.workerId },
     data: {
