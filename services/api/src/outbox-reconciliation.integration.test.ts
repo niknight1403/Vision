@@ -83,9 +83,16 @@ suite("outbox reconciliation (PostgreSQL)", () => {
 
     const complete = await reconcileOutbox(prisma, {
       since: createdAt, limit: 2, now: createdAt,
+      expectedConsumers: { "test.reconciliation.window": ["consumer-z", "consumer-a"] },
     });
     expect(complete.scanned).toBe(2);
-    expect(complete.findings.map((finding) => finding.eventId).sort()).toEqual(ordered.map((item) => item.id).sort());
+    expect(complete.findings.map(({ eventId, code, consumerName }) => [
+      eventId, code, consumerName ?? null,
+    ])).toEqual(ordered.flatMap((item) => [
+      [item.id, "PUBLISHED_TIMESTAMP_MISSING", null],
+      [item.id, "REQUIRED_RECEIPT_MISSING", "consumer-a"],
+      [item.id, "REQUIRED_RECEIPT_MISSING", "consumer-z"],
+    ]));
     const after = await prisma.outboxEvent.findMany({
       where: { id: { in: ids } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
