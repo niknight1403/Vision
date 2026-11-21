@@ -102,3 +102,38 @@ Die API-README grenzt das ausdrücklich ab: Der lokale Produkt-Demo-Start aktivi
 3. Vor dem Start eine allowlist-basierte Consumer-Konfiguration laden und bei unbekanntem Event/Schema fail-closed bleiben.
 4. Zunächst einen reinen DB-Projektions-Consumer in isolierter Umgebung integrieren; externe Effekte und Finanzbuchungen bleiben ausgeschlossen.
 5. Laufzeitbelege getrennt erfassen: Prozess/Deployment, Queue-Lag, Claim/Lease, Retry/DLQ, Consumer-Receipt und fachliche Wirkung.
+
+
+## Event-Klassifikation und Fan-out-Entscheidung
+
+Die Event-Typen wurden nach ihrem tatsächlichen Zweck im geprüften Code eingeordnet. "Nicht fan-outen" bedeutet hier nicht, dass das Ereignis gelöscht werden soll; es bedeutet, dass kein unabhängiger Consumer ohne nachgewiesenen fachlichen Bedarf aktiviert wird.
+
+| Event-Typ | Klasse | Fan-out-Entscheidung | Begründung / Voraussetzung |
+|---|---|---|---|
+| `agent.task.created` | Task-Lifecycle / Audit | Vorerst kein Consumer | Der Orchestrator liest AgentTask direkt. Zusätzliche Queue-Verbraucher könnten denselben Auftrag doppelt starten. |
+| `agent.task.started` | Task-Lifecycle / Telemetrie | Optional später | Erst nach Definition eines konkreten Audit-/Observability-Ziels und Retention. |
+| `agent.task.checkpointed` | Task-Lifecycle / Telemetrie | Kein Standard-Fan-out | Checkpoint liegt bereits auf AgentTask; Event-Consumer darf keine zweite Checkpoint-Wahrheit erzeugen. |
+| `agent.task.succeeded` | Task-Lifecycle / Audit | Optional später | Geeignet für Benachrichtigung/Projektion, wenn ein fachlicher Empfänger und Datenschutzregeln feststehen. |
+| `agent.task.retry_scheduled` | Task-Lifecycle / Telemetrie | Kein Standard-Fan-out | Retry wird bereits über AgentTask.availableAt gesteuert. Kein zweiter Retry-Mechanismus. |
+| `agent.task.failed` | Task-Lifecycle / Audit | Optional später | Erst nach Definition von Fehlerklassifikation, Zugriffsschutz und Aufbewahrung. |
+| `agent.task.cancelled` | Task-Lifecycle / Audit | Optional später | Kein zusätzlicher Cancel-Consumer ohne konkreten Seiteneffekt. |
+| `hidden_treasure.analysis.requested` | Legacy-/Domänen-Signal | Nicht als Worker-Queue verwenden | Die Analyse wird bereits über AgentTask + Agent-Task-Worker abgearbeitet. Das Event ist derzeit redundant für die Ausführung. |
+| `wallet.reservation.created` | Finanzielles Domänenereignis | Gesperrt | Nur nach genehmigtem Kontenplan, Buchungsregeln, Idempotenz-/Storno-Konzept und Finance-Owner. |
+| `wallet.reservation.released` | Finanzielles Domänenereignis | Gesperrt | Gleiche Finance-Gates; keine automatische Journalbuchung aus dem derzeitigen Payload. |
+
+### Event-Vertrag und Producer-Konsistenz
+
+- `OutboxEvent.schemaVersion` hat Datenbank-Default `1`. Der direkte Producer in `app.ts` lässt das Feld weg; Task-Service und Wallet-Service schreiben über unterschiedliche Pfade. Das funktioniert mit dem aktuellen Default, aber die Event-Erzeugung ist nicht zentral validiert.
+- `enqueueOutboxEvent(tx, input)` validiert nichtleere Event-Typen/Aggregate-IDs und positive ganzzahlige Schema-Versionen und schreibt innerhalb der übergebenen Transaktion.
+- Der Task-Service verwendet derzeit einen eigenen lokalen `emit`-Helper mit direktem `outboxEvent.create`; die Treasure-Analysis-Route schreibt ebenfalls direkt. Eine spätere Konsolidierung sollte alle Producer über den gemeinsamen Helper führen, ohne Transaktionsgrenzen zu verändern.
+- Der Wallet-Payload enthält tenantId, Task-Lifecycle-Payloads nicht. Bei Task-Events ist die Datenbankrelation `AgentTask.tenantId` maßgeblich; bei Wallet-Events `WalletAccount.tenantId`.
+- Keine dieser Event-Klassen besitzt aktuell einen bestätigten produktiven Consumer-Startpfad. Diese Tabelle ist eine Architekturentscheidung für die nächste Umsetzung, keine Aktivierungsfreigabe.
+
+### Empfohlener erster Consumer
+
+Keiner der bestehenden Event-Typen ist bereits ein sicherer erster Fan-out-Kandidat:
+- Task-Events haben bereits einen primären direkten Task-Worker-Pfad oder würden zunächst nur Telemetrie duplizieren.
+- Wallet-Events sind finanzkritisch und bleiben gesperrt.
+- Treasure-Analysis ist für die Ausführung redundant zum AgentTask.
+
+Der erste Consumer sollte daher erst nach Benennung eines echten Projektion-/Audit-Ziels samt Eigentümer eingeführt werden. Ein künstlicher "logging consumer" ist kein Ersatz für einen fachlichen Zweck und erzeugt nur scheinbare Betriebsaktivität.
