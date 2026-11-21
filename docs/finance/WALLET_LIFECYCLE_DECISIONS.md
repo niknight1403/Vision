@@ -307,3 +307,10 @@ This is integration-test and documentation coverage only. It does not mutate eve
 Unit and PostgreSQL integration coverage now verify the complementary case: when a required consumer appears multiple times in configuration but its durable receipt exists, reconciliation emits no missing-receipt finding for that consumer. Other distinct consumers without receipts remain individually reported. The database test also verifies the persisted receipt remains present.
 
 This is test and documentation coverage only. No production logic, event dispatch, receipt mutation, wallet/journal state, payment behavior, or external effects are changed.
+
+
+## Sprint 3.27 — transactional inbox input contract
+
+Unit coverage now verifies the transactional inbox boundary before database work: consumer names are trimmed and constrained to 1–128 characters, blank event IDs are rejected, receipt insertion uses conflict-safe duplicate handling, and an existing receipt prevents the handler from running. Invalid inputs must not touch the receipt table or invoke consumer code.
+
+This is test and documentation coverage only. No production behavior, database schema, event dispatch, wallet/journal state, payment behavior, or external side effect is changed.
