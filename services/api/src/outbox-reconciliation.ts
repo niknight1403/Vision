@@ -73,7 +73,7 @@ export function reconcileOutboxEvents(
     if (event.status === "PUBLISHED") {
       if (!event.publishedAt) add("PUBLISHED_TIMESTAMP_MISSING", "CRITICAL", event);
       const receipts = new Set(event.consumerReceipts.map((receipt) => receipt.consumerName));
-      for (const consumerName of expectedConsumers[event.eventType] ?? []) {
+      for (const consumerName of new Set(expectedConsumers[event.eventType] ?? [])) {
         if (!receipts.has(consumerName)) add("REQUIRED_RECEIPT_MISSING", "CRITICAL", event, consumerName);
       }
     }
