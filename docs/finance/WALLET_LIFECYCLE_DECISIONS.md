@@ -349,3 +349,10 @@ PostgreSQL integration coverage expires a live lease while its handler is held, 
 PostgreSQL integration coverage creates one PROCESSING event with an expired lease and races two independent claim attempts. Exactly one attempt must receive a claim token; the other must receive no event. The persisted attempt counter advances once, and the stored lease owner must equal the winning claim token with a future lease deadline.
 
 This verifies the expired-lease recovery contention boundary using PostgreSQL row locking. It adds test and documentation coverage only; no production behavior, schema, wallet/journal, payment, or external side effects are changed.
+
+
+## Sprint 3.33 — stale worker failure fencing
+
+PostgreSQL integration coverage now holds an earlier worker attempt until its lease expires, lets the same worker identity reclaim the event with a fresh claim token, then makes the stale handler fail. Its retry/dead-letter update must return OUTBOX_LEASE_LOST and leave the replacement PROCESSING lease, attempt count, and lastError untouched. The replacement worker then publishes successfully.
+
+This complements stale-success acknowledgement coverage: both success and failure paths must prove ownership with the exact per-claim token. No new financial workflow or external side effect is introduced.
