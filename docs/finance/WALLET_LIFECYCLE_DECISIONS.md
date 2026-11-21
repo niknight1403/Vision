@@ -218,3 +218,14 @@ This checkpoint adds PostgreSQL integration coverage only; it does not change wa
 - The existing concurrent full-release test remains in place.
 
 These tests exercise the wallet row lock, serializable retry wrapper, source-reservation cumulative limit, idempotency, and transactional outbox together. They use isolated PostgreSQL fixtures only. No journal mapping, provider integration, live payment, payout, or production mutation is introduced by this checkpoint. The test suite must pass on the exact branch head before this sprint is considered complete.
+
+## 16. Sprint 3.17 — partial-release transaction composition proof
+
+Adds a PostgreSQL integration proof for the release side of the caller-owned transaction boundary:
+
+- A partial release, balanced test-only journal transaction, and additional outbox event are executed in one SERIALIZABLE transaction.
+- A forced failure must roll back the reserved-counter decrement, release ledger row, journal header/entries, and both outbox events.
+- A successful retry of the same composition shape must commit the release, journal, and outbox writes together.
+- The test uses explicitly named TEST-RELEASE-* journal account codes only; these are not production accounting mappings.
+
+This validates technical atomicity for a composed release command. It does not wire journal posting into the existing production releaseFunds wrapper, approve financial semantics, or enable provider, payout, refund, settlement, or payment execution. A future production command still requires finance-owner approval of the accounting treatment and an authenticated application-level authorization boundary.
