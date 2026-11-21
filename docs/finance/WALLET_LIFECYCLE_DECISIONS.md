@@ -369,4 +369,11 @@ PostgreSQL integration coverage exercises both late success and late failure. Ea
 
 Outbox success acknowledgements and failure/retry updates now evaluate the lease deadline with PostgreSQL `NOW()`, the same clock used when claims are created. This avoids allowing a worker host whose clock is ahead or behind the database to decide whether its lease is still valid. The late-success and late-failure PostgreSQL fixtures also expire leases using database time, so the tests exercise the same clock domain as the production predicate.
 
-Retry scheduling remains an application-computed `availableAt` timestamp; only lease ownership/deadline enforcement is moved to the database clock. This does not cancel in-flight handlers or guarantee exactly-once remote side effects.
+Retry scheduling initially remained application-computed and is completed by Sprint 3.36 below. This does not cancel in-flight handlers or guarantee exactly-once remote side effects.
+
+
+## Sprint 3.36 — database-clock retry scheduling
+
+The outbox worker now computes retry eligibility as PostgreSQL `NOW() + retry interval`, rather than persisting an application-host timestamp. Claim eligibility, lease creation, lease fencing, and retry availability therefore share the database clock domain. The exponential-backoff interval remains calculated from the configured attempt count and is bounded by the existing retry-delay policy.
+
+PostgreSQL integration coverage reads the persisted retry deadline relative to `NOW()` and verifies that the event becomes eligible in the expected future window. This removes host/database clock skew from retry scheduling; it does not change delivery semantics, external side effects, wallet/journal behavior, or payment workflows.
