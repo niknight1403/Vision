@@ -8,6 +8,7 @@ import { authenticateBearerToken, requireAdmin, requireOperator, type Authentica
 import { loginWithPassword, revokeRefreshToken, rotateRefreshToken } from "./auth-session-service.js";
 import { listDealCandidates, reviewDealCandidate } from "./deal-candidate-service.js";
 import { runAndPersistDealScan } from "./deal-scan-service.js";
+import { createAgentTask } from "./agent-task-service.js";
 import type { ProviderRegistry } from "./providers/registry.js";
 
 export interface ServerDependencies {
@@ -296,13 +297,9 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
           correlationId: existing.correlationId, execution: "PENDING_WORKER" });
       }
       const correlationId = randomUUID();
-      const task = await prisma.$transaction(async (tx) => {
-        const created = await tx.agentTask.create({ data: { ownerId: principal.userId,
-          taskType: "HIDDEN_TREASURE_ANALYSIS", status: "QUEUED", input, inputHash,
-          correlationId, idempotencyKey, maxAttempts: 3 } });
-        await tx.outboxEvent.create({ data: { eventType: "hidden_treasure.analysis.requested",
-          aggregateId: created.id, correlationId, payload: { taskId: created.id, taskType: created.taskType } } });
-        return created;
+      const task = await createAgentTask(prisma, {
+        ownerId: principal.userId, taskType: "HIDDEN_TREASURE_ANALYSIS", input,
+        idempotencyKey, correlationId, maxAttempts: 3,
       });
       return reply.code(202).send({ taskId: task.id, status: task.status, correlationId,
         execution: "PENDING_WORKER" });
