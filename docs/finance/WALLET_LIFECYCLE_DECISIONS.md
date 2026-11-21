@@ -268,3 +268,12 @@ The pure outbox reconciliation function now sorts findings by event ID, finding 
 A unit regression test permutes both event order and consumer configuration order, then asserts complete report equality and the canonical finding sequence. The database query continues to use its existing deterministic `createdAt ASC, id ASC` selection order; this sprint makes the pure report output deterministic independently of that query order.
 
 This is a diagnostic-output change only. It does not mutate outbox events, receipts, leases, wallet balances, ledger entries, journal postings, or payment state. No automatic replay, repair, financial posting, or external side effect is introduced.
+
+
+## Sprint 3.22 — PostgreSQL canonical finding-order proof
+
+The bounded PostgreSQL outbox reconciliation integration test now supplies multiple required consumers in reverse lexical order and asserts the exact returned finding sequence for multiple events sharing the same creation timestamp. For each event, the report must list the missing published timestamp first, followed by required-consumer findings in canonical consumer-name order; events themselves must follow canonical event-ID order.
+
+Unlike a set-membership or post-sorted assertion, this verifies the actual report sequence returned by the database-backed reconciliation entry point. The existing before/after row comparison remains in place, and the report must continue to omit payload data.
+
+This is integration-test and documentation coverage only. No production behavior, event state, receipt, lease, wallet balance, ledger entry, journal posting, payment state, or external side effect is changed.
