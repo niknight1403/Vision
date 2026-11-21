@@ -137,7 +137,7 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     }, { baseDelayMs: 0 });
 
     expect((await prisma.walletAccount.findUniqueOrThrow({ where: { id: accountId } })).reservedCents).toBe(1_000n);
-    expect(await prisma.walletLedger.count({ where: { accountId_referenceId: { accountId, referenceId } } })).toBe(1);
+    expect(await prisma.walletLedger.count({ where: { accountId, referenceId } })).toBe(1);
     expect(await prisma.journalTransaction.count({ where: { tenantId, referenceId } })).toBe(1);
     expect(await prisma.outboxEvent.count({ where: { correlationId: referenceId } })).toBe(2);
   });
