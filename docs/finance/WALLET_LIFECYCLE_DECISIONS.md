@@ -391,3 +391,14 @@ The PostgreSQL integration test holds a handler beyond its original five-second 
 - Integration coverage expires a running handler's lease, lets the heartbeat observe lease loss, permits a replacement claim, and verifies the stale handler cannot acknowledge the event.
 - This remains at-least-once delivery. Lease loss does not terminate arbitrary handler code or undo an external side effect already performed; handlers and providers still require idempotency.
 - No wallet/journal, payment, schema, or external financial workflow is enabled by this test-only checkpoint.
+
+
+## Sprint 3.39 — graceful outbox worker shutdown
+
+- Added `runOutboxWorker`, a sequential polling runner controlled by an `AbortSignal`.
+- Shutdown stops subsequent polling and returns a bounded run summary after the current delivery attempt has completed its handler and acknowledgement/retry transition.
+- An abort during the idle wait wakes the runner immediately; no polling timer is left active.
+- An abort that arrives while a database claim is already in flight cannot retroactively cancel that claim. If it succeeds, that one delivery is drained before the runner exits; no subsequent claim is started.
+- The runner does not cancel arbitrary handler code, release a lease while a handler may still be running, or promise exactly-once remote effects. Existing lease fencing, heartbeat renewal, provider idempotency, and reconciliation remain required.
+- Unit coverage verifies idle-poll interruption, active-handler drain, no subsequent claim after abort, and polling interval validation.
+- No wallet/journal lifecycle, payment, schema, or external financial workflow changed.
