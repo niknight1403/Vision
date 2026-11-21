@@ -208,3 +208,13 @@ No schema, accounting mapping, provider call, payment command, or production lif
 - Retried callbacks may execute more than once. They must contain database work only; remote/provider calls, notifications and other non-transactional effects must be represented by an outbox event and handled after commit.
 - Unit tests cover retry-on-P2034, no retry for business errors, attempt exhaustion, SERIALIZABLE isolation and invalid retry configuration.
 - This is transaction reliability plumbing only. It does not authorize journal account mappings, deposits, purchases, fees, payouts, refunds, chargebacks or provider execution.
+
+## 15. Sprint 3.16 — concurrent partial-release regression coverage
+
+This checkpoint adds PostgreSQL integration coverage only; it does not change wallet behavior or authorize a new financial lifecycle.
+
+- Two simultaneous calls using the same partial-release reference and identical payload must both resolve successfully while producing exactly one release ledger row and one release outbox event.
+- Two simultaneous partial releases with distinct references that would cumulatively exceed the original reservation must produce one successful release and one rejected command. The resulting release total must remain within the original reservation, and the wallet reserved counter must match the single committed release.
+- The existing concurrent full-release test remains in place.
+
+These tests exercise the wallet row lock, serializable retry wrapper, source-reservation cumulative limit, idempotency, and transactional outbox together. They use isolated PostgreSQL fixtures only. No journal mapping, provider integration, live payment, payout, or production mutation is introduced by this checkpoint. The test suite must pass on the exact branch head before this sprint is considered complete.
