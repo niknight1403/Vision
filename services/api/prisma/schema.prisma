@@ -13,6 +13,19 @@ enum UserRole {
   VIEWER
 }
 
+enum TenantRole {
+  OWNER
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+enum TenantReviewDecision {
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
 enum LedgerEntryType {
   DEPOSIT
   RESERVATION
@@ -41,6 +54,33 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   refreshSessions RefreshSession[]
+  memberships     TenantMembership[]
+  dealReviews     DealReview[] @relation("DealReviewReviewer")
+}
+
+model Tenant {
+  id          String             @id @default(cuid())
+  name        String
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  memberships TenantMembership[]
+  wallets     WalletAccount[]
+  agentTasks  AgentTask[]
+  dealReviews DealReview[]
+}
+
+model TenantMembership {
+  id        String     @id @default(cuid())
+  tenantId  String
+  userId    String
+  role      TenantRole @default(VIEWER)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId, role])
 }
 
 model RefreshSession {
@@ -60,6 +100,8 @@ model RefreshSession {
 model WalletAccount {
   id                String         @id @default(cuid())
   ownerId           String
+  tenantId          String?
+  tenant            Tenant?        @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   currency          String         @default("EUR")
   balanceCents      BigInt         @default(0)
   reservedCents     BigInt         @default(0)
@@ -69,6 +111,8 @@ model WalletAccount {
   ledgerEntries     WalletLedger[]
 
   @@unique([ownerId, currency])
+  @@unique([tenantId, ownerId, currency])
+  @@index([tenantId, createdAt])
 }
 
 model WalletLedger {
@@ -135,6 +179,8 @@ enum ExecutionStatus {
 model AgentTask {
   id             String          @id @default(cuid())
   ownerId        String
+  tenantId       String?
+  tenant         Tenant?         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   taskType       String
   status         ExecutionStatus @default(QUEUED)
   input          Json
@@ -142,7 +188,7 @@ model AgentTask {
   result         Json?
   checkpoint     Json?
   correlationId  String?
-  idempotencyKey String          @unique
+  idempotencyKey String   @unique
   attempt        Int             @default(0)
   maxAttempts    Int             @default(3)
   availableAt    DateTime        @default(now())
@@ -156,6 +202,8 @@ model AgentTask {
 
   @@index([status, createdAt])
   @@index([status, availableAt])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, createdAt])
   @@index([ownerId, createdAt])
   @@index([leaseUntil])
 }
@@ -187,6 +235,7 @@ model DealCandidate {
   reviewedAt               DateTime?
   createdAt                DateTime         @default(now())
   updatedAt                DateTime         @updatedAt
+  reviews                  DealReview[]
 
   @@unique([providerId, externalId])
   @@index([reviewStatus, updatedAt])
@@ -194,6 +243,32 @@ model DealCandidate {
   @@index([observedAt])
 }
 
+
+model LegacyDealReviewState {
+  candidateId  String           @id
+  reviewStatus DealReviewStatus
+  reviewedBy   String?
+  reviewedAt   DateTime?
+  archivedAt   DateTime         @default(now())
+}
+
+model DealReview {
+  id             String              @id @default(cuid())
+  tenantId       String
+  candidateId    String
+  reviewerUserId String
+  decision       TenantReviewDecision
+  reviewedAt     DateTime            @default(now())
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  candidate      DealCandidate       @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  reviewer       User                @relation("DealReviewReviewer", fields: [reviewerUserId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, candidateId])
+  @@index([tenantId, decision, reviewedAt])
+  @@index([reviewerUserId, reviewedAt])
+}
 
 enum TestnetKillSwitchScope {
   GLOBAL
