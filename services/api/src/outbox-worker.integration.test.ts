@@ -316,10 +316,10 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     );
     try {
       await handlerEntered;
-      await prisma.outboxEvent.updateMany({
-        where: { id: event.id, status: "PROCESSING" },
-        data: { leaseUntil: new Date(Date.now() - 1_000) },
-      });
+      await prisma.$executeRaw`
+        UPDATE "OutboxEvent" SET "leaseUntil" = NOW() - INTERVAL '1 second'
+        WHERE id = ${event.id} AND status = 'PROCESSING'
+      `;
       release();
       await expect(worker).rejects.toThrow("OUTBOX_LEASE_LOST");
     } finally {
@@ -352,10 +352,10 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     );
     try {
       await handlerEntered;
-      await prisma.outboxEvent.updateMany({
-        where: { id: event.id, status: "PROCESSING" },
-        data: { leaseUntil: new Date(Date.now() - 1_000) },
-      });
+      await prisma.$executeRaw`
+        UPDATE "OutboxEvent" SET "leaseUntil" = NOW() - INTERVAL '1 second'
+        WHERE id = ${event.id} AND status = 'PROCESSING'
+      `;
       release();
       await expect(worker).rejects.toThrow("OUTBOX_LEASE_LOST");
     } finally {
