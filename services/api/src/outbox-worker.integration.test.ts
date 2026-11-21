@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
-import { claimOutboxMessage, processOneOutboxMessage, processOneOutboxMessageWithInbox } from "./outbox-worker.js";
+import { claimOutboxMessage, processOneOutboxMessage, processOneOutboxMessageWithInbox, runOutboxWorker } from "./outbox-worker.js";
 
 const databaseEnabled = Boolean(process.env.DATABASE_URL);
 const suite = describe.skipIf(!databaseEnabled);
@@ -638,6 +638,54 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(current.lastError).not.toContain("sk-test-secret");
     expect(await prisma.outboxConsumerReceipt.count({ where: { eventId: event.id } })).toBe(0);
   });
+
+
+  it("stops claiming on shutdown and drains the active handler before returning", async () => {
+    const suffix = `${process.pid}-${Date.now()}`;
+    const aggregateId = `outbox-graceful-drain-${suffix}`;
+    const pendingAggregateId = `outbox-graceful-drain-pending-${suffix}`;
+    aggregateIds.push(aggregateId, pendingAggregateId);
+    const active = await prisma.outboxEvent.create({ data: {
+      eventType: "test.graceful-drain", aggregateId, payload: { test: true },
+    } });
+    const pending = await prisma.outboxEvent.create({ data: {
+      eventType: "test.graceful-drain", aggregateId: pendingAggregateId, payload: { test: true },
+    } });
+
+    const controller = new AbortController();
+    let signalEntered!: () => void;
+    let releaseHandler!: () => void;
+    const handlerEntered = new Promise<void>((resolve) => { signalEntered = resolve; });
+    const handlerGate = new Promise<void>((resolve) => { releaseHandler = resolve; });
+    let settled = false;
+    const runner = runOutboxWorker(
+      prisma,
+      { workerId: "worker-graceful-drain", leaseSeconds: 30, eventTypes: ["test.graceful-drain"] },
+      async () => { signalEntered(); await handlerGate; },
+      { signal: controller.signal, pollIntervalMs: 50 },
+    ).finally(() => { settled = true; });
+
+    try {
+      await handlerEntered;
+      controller.abort();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(settled).toBe(false);
+      releaseHandler();
+      await expect(runner).resolves.toEqual({ published: 1, retried: 0, deadLettered: 0 });
+    } finally {
+      releaseHandler();
+      await runner.catch(() => undefined);
+    }
+
+    const [activeRow, pendingRow] = await Promise.all([
+      prisma.outboxEvent.findUniqueOrThrow({ where: { id: active.id } }),
+      prisma.outboxEvent.findUniqueOrThrow({ where: { id: pending.id } }),
+    ]);
+    expect(activeRow.status).toBe("PUBLISHED");
+    expect(activeRow.lockedBy).toBeNull();
+    expect(pendingRow.status).toBe("PENDING");
+    expect(pendingRow.attempts).toBe(0);
+  }, 15_000);
 
 });
 

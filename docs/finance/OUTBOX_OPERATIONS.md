@@ -80,3 +80,10 @@ This PR does not add an operator replay endpoint, dashboard, metrics exporter, o
 - DEAD_LETTER transition is observable and cannot be replayed without an audited authorization path.
 - Metrics and alerts are exercised with synthetic test events.
 - Event schema compatibility is verified for every registered consumer.
+
+
+## Graceful outbox worker shutdown
+
+`runOutboxWorker` is a polling/drain loop controlled by an `AbortSignal`. Once the signal is aborted, the runner stops starting new claims. If a handler is already running, the runner awaits the normal `processOneOutboxMessage` path before returning; successful work is acknowledged, and failed work follows the configured retry/dead-letter policy. The runner returns aggregate published/retried/dead-lettered counts for the lifetime of that run.
+
+This is graceful draining, not forced cancellation. It does not abort arbitrary handler code, and callers must allow enough process termination grace for the active handler and its database acknowledgement to finish. If the process is forcibly killed, lease expiry and at-least-once redelivery remain the recovery mechanism. External side effects still require downstream idempotency.

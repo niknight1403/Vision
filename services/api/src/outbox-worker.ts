@@ -224,3 +224,47 @@ export async function processOneOutboxMessageWithInbox(
       : "RETRY_SCHEDULED";
   }
 }
+
+
+// A drain runner owns polling, not handler cancellation. Aborting the signal stops
+// future claims; an already-claimed message is awaited through its normal ack/retry path.
+export type OutboxRunnerOptions = {
+  signal: AbortSignal;
+  pollIntervalMs?: number;
+};
+
+export async function runOutboxWorker(
+  prisma: PrismaClient,
+  options: WorkerOptions,
+  handler: OutboxHandler,
+  runner: OutboxRunnerOptions,
+): Promise<{ published: number; retried: number; deadLettered: number }> {
+  const pollIntervalMs = runner.pollIntervalMs ?? 1_000;
+  if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 50 || pollIntervalMs > 30_000) {
+    throw new Error("INVALID_POLL_INTERVAL_MS");
+  }
+
+  const totals = { published: 0, retried: 0, deadLettered: 0 };
+  while (!runner.signal.aborted) {
+    const result = await processOneOutboxMessage(prisma, options, handler);
+    if (result === "PUBLISHED") totals.published += 1;
+    else if (result === "RETRY_SCHEDULED") totals.retried += 1;
+    else if (result === "DEAD_LETTER") totals.deadLettered += 1;
+    else if (!runner.signal.aborted) {
+      await new Promise<void>((resolve) => {
+        if (runner.signal.aborted) return resolve();
+        const timer = setTimeout(done, pollIntervalMs);
+        function done() {
+          runner.signal.removeEventListener("abort", onAbort);
+          resolve();
+        }
+        function onAbort() {
+          clearTimeout(timer);
+          done();
+        }
+        runner.signal.addEventListener("abort", onAbort, { once: true });
+      });
+    }
+  }
+  return totals;
+}
