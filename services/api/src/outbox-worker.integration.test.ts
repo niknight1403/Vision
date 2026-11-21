@@ -446,6 +446,50 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(completed.leaseUntil).toBeNull();
   }, 15_000);
 
+  it("does not renew an expired lease and rejects the stale handler", async () => {
+    const aggregateId = `outbox-expired-heartbeat-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.lease.expired-heartbeat",
+      aggregateId,
+      payload: { test: true },
+    } });
+
+    let signalEntered!: () => void;
+    let releaseHandler!: () => void;
+    const entered = new Promise<void>((resolve) => { signalEntered = resolve; });
+    const handlerGate = new Promise<void>((resolve) => { releaseHandler = resolve; });
+    const worker = processOneOutboxMessage(
+      prisma,
+      { workerId: "worker-expired-heartbeat", leaseSeconds: 3, eventTypes: ["test.lease.expired-heartbeat"] },
+      async () => {
+        signalEntered();
+        await handlerGate;
+      },
+    );
+
+    try {
+      await entered;
+      await prisma.$executeRaw`
+        UPDATE "OutboxEvent"
+        SET "leaseUntil" = NOW() - INTERVAL '1 second'
+        WHERE id = ${event.id} AND status = 'PROCESSING'
+      `;
+      // Allow the scheduled heartbeat to observe the expired lease and fail closed.
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      const expired = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+      expect(expired.leaseUntil?.getTime()).toBeLessThan(Date.now());
+      await expect(claimOutboxMessage(prisma, {
+        workerId: "worker-expired-heartbeat-contender",
+        eventTypes: ["test.lease.expired-heartbeat"],
+      })).resolves.toMatchObject({ id: event.id });
+      await expect(worker).rejects.toThrow("OUTBOX_LEASE_LOST");
+    } finally {
+      releaseHandler();
+      await worker.catch(() => undefined);
+    }
+  }, 15_000);
+
   it("moves exhausted messages to dead letter and clears the lease", async () => {
     const aggregateId = `outbox-dead-letter-${process.pid}-${Date.now()}`;
     aggregateIds.push(aggregateId);
