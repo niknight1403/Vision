@@ -224,3 +224,60 @@ export async function processOneOutboxMessageWithInbox(
       : "RETRY_SCHEDULED";
   }
 }
+
+
+export type OutboxWorkerRunnerOptions = WorkerOptions & { pollIntervalMs?: number };
+export type OutboxWorkerRunSummary = {
+  published: number;
+  retryScheduled: number;
+  deadLettered: number;
+};
+
+/** Runs sequentially until aborted. Shutdown stops future polls and drains the active handler. */
+export async function runOutboxWorker(
+  prisma: PrismaClient,
+  options: OutboxWorkerRunnerOptions,
+  handler: OutboxHandler,
+  signal: AbortSignal,
+): Promise<OutboxWorkerRunSummary> {
+  const pollIntervalMs = options.pollIntervalMs ?? 1_000;
+  if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 250 || pollIntervalMs > 30_000) {
+    throw new Error("INVALID_POLL_INTERVAL_MS");
+  }
+
+  const summary: OutboxWorkerRunSummary = {
+    published: 0,
+    retryScheduled: 0,
+    deadLettered: 0,
+  };
+
+  while (!signal.aborted) {
+    const result = await processOneOutboxMessage(prisma, options, handler);
+    if (result === "PUBLISHED") summary.published += 1;
+    else if (result === "RETRY_SCHEDULED") summary.retryScheduled += 1;
+    else if (result === "DEAD_LETTER") summary.deadLettered += 1;
+
+    // An abort during a handler is honored only after that handler and its
+    // acknowledgement/retry transition have settled. Never start another poll.
+    if (signal.aborted) break;
+    if (result === "IDLE") await waitForOutboxPoll(pollIntervalMs, signal);
+  }
+
+  return summary;
+}
+
+function waitForOutboxPoll(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, milliseconds);
+    signal.addEventListener("abort", finish, { once: true });
+    // Close the race between the initial aborted check and listener registration.
+    if (signal.aborted) finish();
+  });
+}
