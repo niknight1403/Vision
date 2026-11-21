@@ -50,6 +50,19 @@ export function reconcileOutboxEvents(
     throw new Error("INVALID_PENDING_WARNING_SECONDS");
   }
 
+  for (const [eventType, consumerNames] of Object.entries(expectedConsumers)) {
+    if (!eventType.trim() || !Array.isArray(consumerNames) ||
+        consumerNames.some((name) => typeof name !== "string" || !name.trim())) {
+      throw new Error("INVALID_EXPECTED_CONSUMERS");
+    }
+    // This outbox currently has one terminal PUBLISHED state per event, not
+    // per-consumer delivery rows. Multiple independent consumers would make
+    // the report promise fan-out that the dispatcher cannot currently deliver.
+    if (consumerNames.length > 1) {
+      throw new Error("OUTBOX_MULTI_CONSUMER_FANOUT_UNSUPPORTED");
+    }
+  }
+
   const counts: OutboxReconciliationReport["counts"] = {
     PENDING: 0, PROCESSING: 0, PUBLISHED: 0, DEAD_LETTER: 0,
   };
