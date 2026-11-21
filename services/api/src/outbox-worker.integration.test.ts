@@ -175,6 +175,67 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
   });
 
 
+  it("allows only one concurrent worker to claim and execute an eligible event", async () => {
+    const aggregateId = `outbox-concurrent-claim-${process.pid}-${Date.now()}`;
+    const effectScope = `outbox-concurrent-effect-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.inbox.worker.concurrent-claim",
+      aggregateId,
+      payload: { test: true },
+    } });
+
+    let handlerCalls = 0;
+    let signalHandlerEntered!: () => void;
+    let releaseHandler!: () => void;
+    const handlerEntered = new Promise<void>((resolve) => { signalHandlerEntered = resolve; });
+    const handlerGate = new Promise<void>((resolve) => { releaseHandler = resolve; });
+
+    const firstWorker = processOneOutboxMessageWithInbox(
+      prisma,
+      { workerId: "worker-concurrent-one", leaseSeconds: 60, eventTypes: ["test.inbox.worker.concurrent-claim"] },
+      "integration-concurrent-claim",
+      async (tx) => {
+        handlerCalls += 1;
+        signalHandlerEntered();
+        await handlerGate;
+        await tx.idempotencyKey.create({ data: {
+          scope: effectScope,
+          key: "single-effect",
+          requestHash: "e".repeat(64),
+          expiresAt: new Date(Date.now() + 60_000),
+        } });
+      },
+    );
+
+    try {
+      await handlerEntered;
+      const secondResult = await processOneOutboxMessageWithInbox(
+        prisma,
+        { workerId: "worker-concurrent-two", leaseSeconds: 60, eventTypes: ["test.inbox.worker.concurrent-claim"] },
+        "integration-concurrent-claim",
+        async () => { handlerCalls += 1; },
+      );
+      expect(secondResult).toBe("IDLE");
+    } finally {
+      releaseHandler();
+    }
+
+    expect(await firstWorker).toBe("PUBLISHED");
+    expect(handlerCalls).toBe(1);
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("PUBLISHED");
+    expect(current.attempts).toBe(1);
+    expect(current.lockedBy).toBeNull();
+    expect(current.leaseUntil).toBeNull();
+    expect(await prisma.outboxConsumerReceipt.count({
+      where: { eventId: event.id, consumerName: "integration-concurrent-claim" },
+    })).toBe(1);
+    expect(await prisma.idempotencyKey.count({ where: { scope: effectScope } })).toBe(1);
+    await prisma.idempotencyKey.deleteMany({ where: { scope: effectScope } });
+  });
+
+
   it("recovers a committed inbox receipt after worker crash and expired lease", async () => {
     const aggregateId = `outbox-inbox-crash-recovery-${process.pid}-${Date.now()}`;
     aggregateIds.push(aggregateId);
