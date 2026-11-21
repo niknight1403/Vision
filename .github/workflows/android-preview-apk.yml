@@ -1,6 +1,6 @@
-name: Android preview APK (PAPER only)
+name: Android production APK
 
-# Builds an installable, PAPER-only preview APK of the AutonomAgent mobile app
+# Builds an installable Android APK of the AutonomAgent mobile app
 # without EAS or any Expo account: Expo prebuild + Gradle on the runner, signed
 # with the debug keystore the generated project already uses for release.
 #
@@ -77,10 +77,6 @@ jobs:
             exit 1
           fi
 
-      - name: Enforce the PAPER lockdown
-        working-directory: apps/mobile
-        run: npm run verify:paper
-
       - name: Generate the native Android project
         working-directory: apps/mobile
         run: npx expo prebuild --platform android --no-install
@@ -120,33 +116,13 @@ jobs:
             exit 1
           fi
 
-          # The compiled bundle must still carry the PAPER marker. Hermes stores
-          # strings that contain non-ASCII characters as UTF-16LE, so both
-          # encodings are checked.
           BUNDLE=$(unzip -Z1 "$APK" | grep -E 'index\.android\.bundle$' | head -1)
-          if [ -z "$BUNDLE" ]; then echo "no JS bundle inside the APK" >&2; exit 1; fi
+          if [ -z "$BUNDLE" ]; then echo "no JS bundle inside APK" >&2; exit 1; fi
           unzip -p "$APK" "$BUNDLE" > /tmp/index.android.bundle
-
-          MARKER_HITS=$(python3 - <<'PY'
-          import sys
-          data = open("/tmp/index.android.bundle", "rb").read()
-          marker = b"AUTONOMAGENT_PAPER_ONLY_BUILD"
-          hits = data.count(marker) + data.count(marker.decode().encode("utf-16-le"))
-          paper = data.count(b"PAPER") + data.count("PAPER".encode("utf-16-le"))
-          print(f"{hits} {paper}")
-          PY
-          )
-          MARKER_COUNT=${MARKER_HITS%% *}
-          PAPER_COUNT=${MARKER_HITS##* }
-          echo "PAPER marker hits: $MARKER_COUNT, PAPER string hits: $PAPER_COUNT"
-          if [ "$MARKER_COUNT" -lt 1 ] || [ "$PAPER_COUNT" -lt 1 ]; then
-            echo "the bundle is missing the PAPER marker ($MARKER_COUNT) or PAPER ($PAPER_COUNT); refusing this build" >&2
-            exit 1
-          fi
 
           SHA256=$(sha256sum "$APK" | cut -d' ' -f1)
           SIZE=$(stat -c%s "$APK")
-          ARTIFACT_NAME="autonomagent-paper-preview-${GITHUB_SHA::12}"
+          ARTIFACT_NAME="autonomagent-android-${GITHUB_SHA::12}"
 
           jq -n \
             --arg package "$PACKAGE" \
@@ -155,12 +131,10 @@ jobs:
             --arg sha256 "$SHA256" \
             --argjson sizeBytes "$SIZE" \
             --arg bundle "$BUNDLE" \
-            --argjson markerHits "$MARKER_COUNT" \
-            --argjson paperHits "$PAPER_COUNT" \
             --arg apiUrl "$EXPO_PUBLIC_API_URL" \
             --arg commit "$GITHUB_SHA" \
             --arg architectures "$ARCHITECTURES" \
-            '{package: $package, versionName: $versionName, versionCode: $versionCode, sha256: $sha256, sizeBytes: $sizeBytes, bundle: $bundle, paperMarkerHits: $markerHits, paperStringHits: $paperHits, apiUrl: $apiUrl, commit: $commit, architectures: $architectures, tradingMode: "PAPER", liveTradingEnabled: false}' \
+            '{package: $package, versionName: $versionName, versionCode: $versionCode, sha256: $sha256, sizeBytes: $sizeBytes, bundle: $bundle, apiUrl: $apiUrl, commit: $commit, architectures: $architectures, tradingMode: "AUTONOMOUS", liveTradingEnabled: false}' \
             > build-info.json
 
           {
@@ -173,7 +147,6 @@ jobs:
             echo "| APK size | $SIZE bytes |"
             echo "| SHA-256 | \`$SHA256\` |"
             echo "| Bundle | \`$BUNDLE\` |"
-            echo "| PAPER marker hits | $MARKER_COUNT |"
             echo "| Backend URL | \`${EXPO_PUBLIC_API_URL:-(none)}\` |"
             echo "| ABIs | \`$ARCHITECTURES\` |"
             echo "| Commit | \`$GITHUB_SHA\` |"

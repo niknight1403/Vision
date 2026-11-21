@@ -1,41 +1,36 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-describe("demo-only trading configuration", () => {
+describe("autonomous trading configuration", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.resetModules();
   });
 
-  it("defaults to PAPER with live trading disabled", async () => {
-    vi.stubEnv("TRADING_MODE", "PAPER");
+  it("defaults to autonomous provider-backed operation", async () => {
+    vi.stubEnv("TRADING_MODE", "AUTONOMOUS");
     vi.stubEnv("LIVE_TRADING_ENABLED", "false");
     vi.stubEnv("EMERGENCY_STOP", "true");
 
     const { config } = await import("./config.js");
-    expect(config.tradingMode).toBe("PAPER");
+    expect(config.tradingMode).toBe("AUTONOMOUS");
     expect(config.liveTradingEnabled).toBe(false);
   });
 
-  it("rejects LIVE mode even when the old opt-in flags are set", async () => {
-    vi.stubEnv("TRADING_MODE", "LIVE");
-    vi.stubEnv("LIVE_TRADING_ENABLED", "true");
-    vi.stubEnv("EMERGENCY_STOP", "false");
-
-    await expect(import("./config.js")).rejects.toThrow("LIVE trading is disabled");
-  });
-
-  it("rejects an attempt to enable LIVE while mode remains PAPER", async () => {
-    vi.stubEnv("TRADING_MODE", "PAPER");
-    vi.stubEnv("LIVE_TRADING_ENABLED", "true");
-    vi.stubEnv("EMERGENCY_STOP", "true");
-
-    await expect(import("./config.js")).rejects.toThrow("LIVE trading is disabled");
-  });
-
-  it("rejects an otherwise valid TESTNET configuration until the release gate enables it", async () => {
+  it("rejects legacy PAPER mode", async () => {
     vi.stubEnv("TRADING_MODE", "PAPER");
     vi.stubEnv("LIVE_TRADING_ENABLED", "false");
-    vi.stubEnv("EMERGENCY_STOP", "true");
+    await expect(import("./config.js")).rejects.toThrow("TRADING_MODE must be AUTONOMOUS");
+  });
+
+  it("rejects mutating execution until a reviewed provider adapter exists", async () => {
+    vi.stubEnv("TRADING_MODE", "AUTONOMOUS");
+    vi.stubEnv("LIVE_TRADING_ENABLED", "true");
+    await expect(import("./config.js")).rejects.toThrow("reviewed provider adapter");
+  });
+
+  it("keeps testnet execution disabled", async () => {
+    vi.stubEnv("TRADING_MODE", "AUTONOMOUS");
+    vi.stubEnv("LIVE_TRADING_ENABLED", "false");
     vi.stubEnv("TESTNET_ENABLED", "true");
     vi.stubEnv("TESTNET_ENVIRONMENT", "TESTNET");
     vi.stubEnv("TESTNET_CONFIG_VERSION", "v1.0.0");

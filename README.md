@@ -4,13 +4,13 @@ AutonomAgent is an Android-first, Expo/React Native TypeScript workspace for res
 
 ## Current release posture
 
-- **Default mode:** PAPER (simulation only)
+- **Default mode:** AUTONOMOUS (real provider data and server-side analysis)
 - **Live trading:** disabled
 - **Purchases/listings:** require real provider integrations and explicit server-side approval
-- **Financial figures:** demo values are labelled; no simulated value is represented as realized revenue
+- **Financial figures:** only provider observations are accepted; no estimate is represented as realized revenue
 - **Secrets:** provider credentials belong on the server, never in the mobile app or `EXPO_PUBLIC_*`
 
-This repository contains a working Vision analysis code path, but it is not yet a deployed production service. Marketplace sold-data integration, verified marketplace checkout, settlement, Play Store signing/distribution, and production deployment evidence are not included. A reproducible PAPER-only preview APK is produced by the `Android preview APK (PAPER only)` workflow; see [docs/android-preview-apk.md](docs/android-preview-apk.md).
+This repository contains a working Vision analysis path and a real provider-driven deal scan. A named marketplace checkout, settlement, Play Store signing/distribution, and production deployment evidence still require the provider's official API contract and deployment credentials; the application does not fabricate these capabilities.
 
 ## Vision specialist swarm
 
@@ -23,7 +23,7 @@ The Vision workflow is an asynchronous, server-side analysis pipeline:
 5. Six specialists run in parallel: visual identification, market research, collector rarity, technical/parts, restoration, and risk/authenticity.
 6. Results and evidence gaps are persisted on the task and shown in the Android client.
 
-Market research deliberately remains `SKIPPED` until a real sold-listing provider is configured. No model-generated price estimate is presented as verified market evidence. Purchase authorization and authenticity verification are always false.
+Market research remains unavailable until a real sold-listing provider is configured. No model-generated price estimate is presented as verified market evidence. Purchase authorization and authenticity verification are always false.
 
 ### Run the Vision stack
 
@@ -43,10 +43,10 @@ Required server-side environment:
 - `apps/mobile` — Expo Android client with authenticated Vision task submission and live status polling
 - `services/api` — Fastify API, durable task queue, and task dispatcher
 - `services/vision-worker` — Python image inspection and six-specialist orchestration
-- `packages/trading-core` — PAPER-only risk/profit calculation primitives
+- `packages/trading-core` — integer-cent risk/profit calculation primitives
 - `docs` — architecture, deployment, and release gates
 
-The trading core also contains three PAPER-only strategy research primitives:
+The trading core also contains three offline strategy research primitives:
 explainable feature-based signals, risk-bounded portfolio allocation, and
 deterministic walk-forward backtesting. They never place orders or call a
 broker. See [docs/advanced-strategies.md](docs/advanced-strategies.md).
@@ -57,15 +57,26 @@ Requirements: Node.js 22.13+ and npm.
 
 ```bash
 npm ci
-npm run mobile
+npm run typecheck
+npm test
 ```
 
-The mobile shell is designed to make the disconnected/demo state explicit. It does not execute real trades.
-
-The PAPER guard that every CI run and the APK build executes can be called directly:
+Configure the server-side real catalog adapter before scanning:
 
 ```bash
-npm run verify:paper --workspace @autonomagent/mobile
+PROVIDER_CATALOG_LIVE_BASE_URL=https://provider.example/api/
+PROVIDER_CATALOG_LIVE_ALLOWED_HOSTS=provider.example
+PROVIDER_CATALOG_LIVE_API_TOKEN=server-side-token
+```
+
+The provider must implement `GET /health` and `GET /products?q=&limit=&currency=` with the documented JSON contract in `services/api/src/providers/catalog-rest-adapter.ts`. No fixture products are substituted when it is absent.
+
+The mobile shell consumes authenticated provider-backed candidates and analysis results. It does not claim a purchase or publication unless a separately reviewed mutating adapter is installed.
+
+The production type and unit checks can be called directly:
+
+```bash
+npm run typecheck && npm test
 ```
 
 ## Safety gates before any live use
@@ -84,8 +95,3 @@ See [docs/architecture.md](docs/architecture.md) and [docs/release-gates.md](doc
 ## License
 
 No license has been granted yet. All rights reserved unless a separate license is added.
-
-
-## Lokaler Produktpilot (Demo)
-
-Die Android-App enthält einen explizit gestarteten, deterministischen Demo-Lauf mit lokal festgelegten Produktbeispielen, Cent-basierter Profit-/Risikobewertung, unveröffentlichten Listing-Entwürfen, illustrativen Reichweitenideen und einer Warteschlange für manuelle Prüfung. Der Demo-Lauf selbst startet keine externen Marktplatz-/Werbeaufrufe, Hintergrundjobs, Käufe, Veröffentlichungen oder Freigabeausführung. Separate API-Worker-Bausteine sind nicht mit dem mobilen Demo-Lauf verbunden und werden vom aktuellen Serverstart nicht gestartet. PAPER bleibt aktiv; die API-Konfiguration weist LIVE hart zurück. Preise, Bestände, Margen und Reichweiten sind Beispieldaten, keine Marktdaten oder Prognosen.

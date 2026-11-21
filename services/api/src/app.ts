@@ -7,6 +7,8 @@ import { config } from "./config.js";
 import { authenticateBearerToken, requireAdmin, type AuthenticatedPrincipal } from "./auth-service.js";
 import { loginWithPassword, revokeRefreshToken, rotateRefreshToken } from "./auth-session-service.js";
 import { listDealCandidates, reviewDealCandidate } from "./deal-candidate-service.js";
+import { runAndPersistDealScan } from "./deal-scan-service.js";
+import type { ProviderRegistry } from "./providers/registry.js";
 
 export interface ServerDependencies {
   prisma: PrismaClient;
@@ -17,6 +19,7 @@ export interface ServerDependencies {
   visionInspector?: {
     inspectItemVisuals(imageUrl: string, hintTitle: string): Promise<Record<string, unknown>>;
   };
+  providers?: ProviderRegistry;
 }
 
 type ReviewDecision = "APPROVED" | "REJECTED" | "ARCHIVED";
@@ -47,6 +50,9 @@ const STATUS_BY_ERROR: Readonly<Record<string, number>> = Object.freeze({
   VISION_WORKER_REJECTED: 502,
   VISION_WORKER_RESPONSE_INVALID: 502,
   VISION_IMAGE_URL_REQUIRED: 400,
+  PROVIDER_NOT_CONFIGURED: 503,
+  DEAL_SCAN_INPUT_INVALID: 400,
+  DEAL_SCAN_FAILED: 502,
   TREASURE_ANALYSIS_IDEMPOTENCY_REQUIRED: 400,
   TREASURE_ANALYSIS_IDEMPOTENCY_CONFLICT: 409,
   TREASURE_ANALYSIS_INPUT_INVALID: 400,
@@ -122,7 +128,8 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     testnetEnabled: config.testnetEnabled,
     emergencyStop: config.emergencyStop,
     tradingReady: false,
-    note: "Health only. Trading endpoints are not implemented.",
+    providerConfigured: Boolean(dependencies.providers?.list().length),
+    note: "Autonomous sourcing and analysis only; mutating marketplace actions require a reviewed adapter.",
   }));
 
   app.post("/v1/auth/login", async (request, reply) => {
@@ -200,6 +207,61 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
       return reply.code(200).send({ deals: deals.map(serializeDeal) });
     } catch (error) {
       return fail(reply, error);
+    }
+  });
+
+  app.post("/v1/deals/scan", async (request, reply) => {
+    try {
+      const principal = await principalFrom(request);
+      requireAdmin(principal);
+      if (!dependencies.providers) throw new Error("PROVIDER_NOT_CONFIGURED");
+      const body = request.body as Record<string, unknown> | undefined;
+      const query = body?.query;
+      const limit = body?.limit;
+      if (typeof query !== "string" || !query.trim() || query.length > 200 ||
+          !Number.isInteger(limit) || Number(limit) < 1 || Number(limit) > 50 || body?.currency !== "EUR") {
+        throw new Error("DEAL_SCAN_INPUT_INVALID");
+      }
+      const bigintField = (name: string): bigint => {
+        const value = body?.[name];
+        if (typeof value !== "string" || !/^\d+$/.test(value)) throw new Error("DEAL_SCAN_INPUT_INVALID");
+        return BigInt(value);
+      };
+      const result = await runAndPersistDealScan(
+        { prisma, providers: dependencies.providers },
+        {
+          providerId: typeof body?.providerId === "string" ? body.providerId : "catalog-live",
+          query,
+          limit: Number(limit),
+          currency: "EUR",
+          costs: {
+            inboundShippingCents: bigintField("inboundShippingCents"),
+            outboundShippingCents: bigintField("outboundShippingCents"),
+            marketplaceFeeCents: bigintField("marketplaceFeeCents"),
+            paymentFeeCents: bigintField("paymentFeeCents"),
+            packagingCents: bigintField("packagingCents"),
+            riskReserveCents: bigintField("riskReserveCents"),
+          },
+          context: {
+            resalePriceCents: bigintField("resalePriceCents"),
+            openTrades: typeof body?.openTrades === "number" ? body.openTrades : 0,
+            dailyLossCents: bigintField("dailyLossCents"),
+            riskLimits: {
+              maxTradeCents: bigintField("maxTradeCents"),
+              minProfitCents: bigintField("minProfitCents"),
+              minRoiBasisPoints: bigintField("minRoiBasisPoints"),
+              maxOpenTrades: typeof body?.maxOpenTrades === "number" ? body.maxOpenTrades : 0,
+              maxDailyLossCents: bigintField("maxDailyLossCents"),
+            },
+          },
+        },
+      );
+      return reply.code(200).send(result);
+    } catch (error) {
+      const code = errorCode(error);
+      if (code.startsWith("Provider ") || code === "PROVIDER_NOT_CONFIGURED") return fail(reply, new Error("PROVIDER_NOT_CONFIGURED"));
+      if (code === "DEAL_SCAN_INPUT_INVALID") return fail(reply, error);
+      return fail(reply, new Error("DEAL_SCAN_FAILED"));
     }
   });
 
