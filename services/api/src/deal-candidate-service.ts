@@ -1,4 +1,4 @@
-import { Prisma, PrismaClient, type DealReviewStatus } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 
 export interface PersistableDealAnalysis {
   providerId: string;
@@ -17,7 +17,6 @@ export interface PersistableDealAnalysis {
 }
 
 export interface DealCandidateListOptions {
-  reviewStatus?: DealReviewStatus;
   riskPassed?: boolean;
   limit?: number;
 }
@@ -64,9 +63,6 @@ export async function persistDealCandidates(
         roiBasisPoints: deal.roiBasisPoints,
         riskPassed: deal.approvedByRiskRules,
         riskReasons: deal.riskReasons as Prisma.InputJsonValue,
-        reviewStatus: "DISCOVERED" as const,
-        reviewedBy: null,
-        reviewedAt: null,
       };
       saved.push(await tx.dealCandidate.upsert({
         where: { providerId_externalId: { providerId: deal.providerId, externalId: deal.externalId } },
@@ -92,40 +88,9 @@ export async function listDealCandidates(
   }
   return prisma.dealCandidate.findMany({
     where: {
-      ...(options.reviewStatus ? { reviewStatus: options.reviewStatus } : {}),
       ...(options.riskPassed === undefined ? {} : { riskPassed: options.riskPassed }),
     },
     orderBy: [{ expectedProfitCents: "desc" }, { observedAt: "desc" }],
     take: limit,
   });
-}
-
-/**
- * Internal review primitive. Must only be called after authenticated ADMIN
- * authorization. Approval is a review label, never a purchase instruction.
- */
-export async function reviewDealCandidate(
-  prisma: PrismaClient,
-  input: { dealId: string; reviewerId: string; decision: "APPROVED" | "REJECTED" | "ARCHIVED" },
-) {
-  if (!input.dealId.trim() || !input.reviewerId.trim()) throw new Error("DEAL_REVIEW_FIELDS_REQUIRED");
-  const current = await prisma.dealCandidate.findUnique({ where: { id: input.dealId } });
-  if (!current) throw new Error("DEAL_CANDIDATE_NOT_FOUND");
-  if (input.decision === "APPROVED" && (current.simulated || !current.riskPassed)) {
-    throw new Error("DEAL_NOT_ELIGIBLE_FOR_REVIEW_APPROVAL");
-  }
-  const changed = await prisma.dealCandidate.updateMany({
-    where: {
-      id: input.dealId,
-      reviewStatus: "DISCOVERED",
-      updatedAt: current.updatedAt,
-    },
-    data: {
-      reviewStatus: input.decision,
-      reviewedBy: input.reviewerId,
-      reviewedAt: new Date(),
-    },
-  });
-  if (changed.count !== 1) throw new Error("DEAL_REVIEW_CONFLICT");
-  return prisma.dealCandidate.findUniqueOrThrow({ where: { id: input.dealId } });
 }

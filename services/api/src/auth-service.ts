@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import type { PrismaClient, UserRole } from "@prisma/client";
+import type { PrismaClient, TenantRole, UserRole } from "@prisma/client";
 
 const ISSUER = "autonomagent-auth";
 const AUDIENCE = "autonomagent-api";
@@ -19,6 +19,33 @@ export interface AuthenticatedPrincipal {
   userId: string;
   email: string;
   role: UserRole;
+}
+
+export interface AuthenticatedTenantContext {
+  userId: string;
+  tenantId: string;
+  tenantRole: TenantRole;
+}
+
+/** Tenant IDs are selectors only: authorization comes from a live DB membership. */
+export async function resolveTenantContext(
+  prisma: Pick<PrismaClient, "tenantMembership">,
+  principal: AuthenticatedPrincipal,
+  requestedTenantId: string | undefined,
+): Promise<AuthenticatedTenantContext> {
+  if (!requestedTenantId || requestedTenantId.length > 128) throw new Error("TENANT_CONTEXT_REQUIRED");
+  const membership = await prisma.tenantMembership.findUnique({
+    where: { tenantId_userId: { tenantId: requestedTenantId, userId: principal.userId } },
+    select: { tenantId: true, userId: true, role: true },
+  });
+  if (!membership) throw new Error("TENANT_ACCESS_DENIED");
+  return { userId: membership.userId, tenantId: membership.tenantId, tenantRole: membership.role };
+}
+
+export function requireTenantAdmin(context: AuthenticatedTenantContext): void {
+  if (context.tenantRole !== "OWNER" && context.tenantRole !== "ADMIN") {
+    throw new Error("TENANT_ADMIN_ROLE_REQUIRED");
+  }
 }
 
 /** Verify a short-lived HS256 access token and reload authorization from the DB. */
