@@ -327,6 +327,36 @@ suite("authenticated deal review routes (RBAC)", () => {
     expect(missing.json()).toEqual({ error: "DEAL_CANDIDATE_NOT_FOUND" });
   });
 
+  it("rejects a DealReview whose reviewer does not exist at the database layer", async () => {
+    const deal = await createDeal();
+    const tenantId = tenantByEmail.get(adminEmail)!;
+    await expect(prisma.dealReview.create({
+      data: {
+        tenantId,
+        candidateId: deal.id,
+        reviewerUserId: `missing-reviewer-${process.pid}-${sequence}`,
+        decision: "APPROVED",
+      },
+    })).rejects.toMatchObject({ code: "P2003" });
+  });
+
+  it("denies the next API request immediately after tenant membership is revoked", async () => {
+    const tokens = await login(viewerEmail);
+    const tenantId = tenantByEmail.get(viewerEmail)!;
+    const headers = { authorization: `Bearer ${tokens.accessToken}`, "x-tenant-id": tenantId };
+
+    const beforeRevocation = await app.inject({ method: "GET", url: "/v1/deals", headers });
+    expect(beforeRevocation.statusCode).toBe(200);
+
+    await prisma.tenantMembership.delete({
+      where: { tenantId_userId: { tenantId, userId: createdUserIds[1]! } },
+    });
+
+    const afterRevocation = await app.inject({ method: "GET", url: "/v1/deals", headers });
+    expect(afterRevocation.statusCode).toBe(404);
+    expect(afterRevocation.json()).toEqual({ error: "TENANT_ACCESS_DENIED" });
+  });
+
   it("rotates the refresh token exactly once and revokes it on logout", async () => {
     const { refreshToken } = await login(viewerEmail);
 
