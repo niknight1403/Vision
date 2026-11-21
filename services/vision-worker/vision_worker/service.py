@@ -25,6 +25,13 @@ class AnalysisRequest(BaseModel):
     currency: str = Field(default="EUR", min_length=3, max_length=3)
 
 
+class VisualInspectionRequest(BaseModel):
+    """Visual-only inspection: an image URL plus an unverified listing title."""
+    model_config = ConfigDict(extra="forbid")
+    image_url: str = Field(min_length=9, max_length=2048)
+    hint_title: str = Field(default="", max_length=300)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     token = os.getenv("VISION_WORKER_TOKEN", "")
@@ -89,6 +96,25 @@ async def analyze(
     assessment = await swarm.analyze(brief)
     return {
         "assessment": assessment.model_dump(mode="json"),
+        "visual_inspection": visual,
+        "purchase_authorized": False,
+        "authenticity_verified": False,
+    }
+
+
+@app.post("/v1/visual-inspection")
+async def visual_inspection(
+    request: VisualInspectionRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Visual evidence only; the API route behind it never authorizes a purchase."""
+    expected = "Bearer " + app.state.worker_token
+    if not authorization or not hmac.compare_digest(authorization, expected):
+        raise HTTPException(status_code=401, detail="WORKER_AUTH_REQUIRED")
+
+    inspector: VisionTreasureInspector = app.state.inspector
+    visual = await inspector.inspect_item_visuals(request.image_url, request.hint_title)
+    return {
         "visual_inspection": visual,
         "purchase_authorized": False,
         "authenticity_verified": False,
