@@ -97,11 +97,12 @@ function ActionButton({ title, onPress, disabled = false }: {
 function TaskResult({ task }: { task: Task }) {
   const assessment = task.result?.assessment;
   const visual = task.result?.visual_inspection;
+  const isPolling = task.status === "QUEUED" || task.status === "RUNNING" || task.status === "CHECKPOINTED";
   return (
     <Panel>
       <View style={styles.rowBetween}>
         <Text style={styles.panelTitle}>Agenten-Ergebnis</Text>
-        <Text style={styles.status}>{task.status}</Text>
+        <Text style={styles.status}>{isPolling ? `POLLING · ${task.status}` : task.status}</Text>
       </View>
       {visual && (
         <View style={styles.subPanel}>
@@ -134,9 +135,10 @@ function TaskResult({ task }: { task: Task }) {
           {assessment.conflicts.map((item, index) => <Text key={index} style={styles.warning}>• {item}</Text>)}
           {assessment.next_actions.map((item, index) => <Text key={index} style={styles.muted}>Nächster Schritt: {item}</Text>)}
         </>
-      ) : task.status === "QUEUED" || task.status === "RUNNING" ? (
+      ) : isPolling ? (
         <View style={styles.progress}><ActivityIndicator color="#8DB5FF" /><Text style={styles.bodyText}>Spezialisten analysieren den Fund. Ergebnis wird automatisch aktualisiert.</Text></View>
-      ) : <Text style={styles.warning}>Noch kein Analyseergebnis vorhanden. Status und Fehlerprotokoll im Backend prüfen.</Text>}
+      ) : task.status === "FAILED" ? <Text style={styles.error}>FAILED · Die Analyse ist fehlgeschlagen. Keine automatische fachliche Wiederholung wurde ausgelöst.</Text>
+        : <Text style={styles.warning}>Noch kein Analyseergebnis vorhanden. Status und Fehlerprotokoll im Backend prüfen.</Text>}
       <Text style={styles.safetyNote}>Keine Echtheitsgarantie · keine Kauf-Freigabe · keine Verkäuferkontaktaufnahme.</Text>
     </Panel>
   );
@@ -215,19 +217,30 @@ export default function AutopilotDashboard() {
     );
     if (!active.length) return;
     let cancelled = false;
-    const timer = setTimeout(async () => {
+    let inFlight = false;
+    const poll = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
       for (const [dealId, task] of active) {
         try {
           const response = await fetch(API_BASE_URL + "/v1/treasure-analyses/" + encodeURIComponent(task.taskId), {
             headers: { authorization: "Bearer " + accessToken },
           });
-          if (!response.ok) continue;
+          if (!response.ok) {
+            if (!cancelled) setError(`POLLING_FAILED · ${await apiError(response)}`);
+            continue;
+          }
           const next = await response.json() as Task;
           if (!cancelled) setTasks((current) => ({ ...current, [dealId]: next }));
-        } catch { /* keep last known task status after transient network errors */ }
+        } catch {
+          if (!cancelled) setError("POLLING_RETRYING · Netzwerkfehler; der letzte Status bleibt sichtbar und wird erneut abgefragt.");
+        }
       }
-    }, 2000);
-    return () => { cancelled = true; clearTimeout(timer); };
+      inFlight = false;
+    };
+    void poll();
+    const timer = setInterval(() => { void poll(); }, 2000);
+    return () => { cancelled = true; clearInterval(timer); };
   }, [accessToken, tasks]);
 
   return (
