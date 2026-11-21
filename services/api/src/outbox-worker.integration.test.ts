@@ -1058,6 +1058,50 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(row.leaseUntil).toBeNull();
   }, 15_000);
 
+
+  it("does not claim work when shutdown was requested before the worker starts", async () => {
+    const aggregateId = `outbox-pre-aborted-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({
+      data: {
+        eventType: "test.pre-aborted-worker",
+        aggregateId,
+        payload: { test: true },
+      },
+    });
+
+    const controller = new AbortController();
+    controller.abort();
+    const claimSpy = vi.spyOn(prisma, "$queryRaw");
+    const handler = vi.fn(async () => {
+      throw new Error("a pre-aborted worker must not invoke its handler");
+    });
+
+    try {
+      await expect(runOutboxWorker(
+        prisma,
+        {
+          workerId: "worker-pre-aborted",
+          leaseSeconds: 30,
+          eventTypes: ["test.pre-aborted-worker"],
+        },
+        handler,
+        { signal: controller.signal, pollIntervalMs: 50 },
+      )).resolves.toEqual({ published: 0, retried: 0, deadLettered: 0 });
+
+      expect(claimSpy).not.toHaveBeenCalled();
+      expect(handler).not.toHaveBeenCalled();
+    } finally {
+      claimSpy.mockRestore();
+    }
+
+    const row = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(row.status).toBe("PENDING");
+    expect(row.attempts).toBe(0);
+    expect(row.lockedBy).toBeNull();
+    expect(row.leaseUntil).toBeNull();
+  }, 15_000);
+
 });
 
 if (!databaseEnabled) {
