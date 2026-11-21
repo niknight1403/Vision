@@ -33,7 +33,7 @@ export type OrderIntent = {
 export type ProviderOrderSnapshot = {
   providerOrderId: string;
   clientOrderId: string;
-  status: "OPEN" | "PARTIALLY_FILLED" | "FILLED" | "CANCELLED" | "REJECTED";
+  status: string;
   filledQuantity: bigint;
   averagePriceCents: bigint | null;
   feeCents: bigint;
@@ -46,10 +46,14 @@ export type JournalOrderSnapshot = {
   filledQuantity: bigint;
   feeCents: bigint;
   providerOrderId: string | null;
+  instrument?: string;
+  side?: "BUY" | "SELL";
+  quantity?: bigint;
+  priceCents?: bigint;
 };
 
 export type ReconciliationDiff = {
-  kind: "UNKNOWN_INTERNAL_ORDER" | "UNMATCHED_EXTERNAL_ORDER" | "FILL_MISMATCH" | "FEE_MISMATCH" | "STATUS_MISMATCH";
+  kind: "UNKNOWN_INTERNAL_ORDER" | "UNMATCHED_EXTERNAL_ORDER" | "FILL_MISMATCH" | "FEE_MISMATCH" | "STATUS_MISMATCH" | "UNKNOWN_PROVIDER_STATUS" | "QUANTITY_MISMATCH" | "PRICE_MISMATCH";
   severity: "WARNING" | "CRITICAL";
   clientOrderId: string;
   detail: string;
@@ -158,7 +162,9 @@ export function reconcileOrders(internal: readonly JournalOrderSnapshot[], exter
       continue;
     }
     if (order.providerOrderId && order.providerOrderId !== provider.providerOrderId) diffs.push({ kind: "STATUS_MISMATCH", severity: "CRITICAL", clientOrderId: order.clientOrderId, detail: "Provider-Order-ID stimmt nicht überein" });
+    if (!["OPEN", "PARTIALLY_FILLED", "FILLED", "CANCELLED", "REJECTED"].includes(provider.status)) diffs.push({ kind: "UNKNOWN_PROVIDER_STATUS", severity: "CRITICAL", clientOrderId: order.clientOrderId, detail: "Unbekannter Rohstatus erfordert Halt" });
     if (provider.filledQuantity < order.filledQuantity) diffs.push({ kind: "FILL_MISMATCH", severity: "CRITICAL", clientOrderId: order.clientOrderId, detail: "Provider-Fill liegt unter internem Fill" });
+    if (order.quantity !== undefined && provider.filledQuantity > order.quantity) diffs.push({ kind: "QUANTITY_MISMATCH", severity: "CRITICAL", clientOrderId: order.clientOrderId, detail: "Provider-Menge überschreitet interne Obergrenze" });
     if (provider.feeCents !== order.feeCents) diffs.push({ kind: "FEE_MISMATCH", severity: "WARNING", clientOrderId: order.clientOrderId, detail: "Gebührenabweichung muss als Ledger-Event geklärt werden" });
   }
   for (const order of external) if (!internalByClient.has(order.clientOrderId)) diffs.push({ kind: "UNMATCHED_EXTERNAL_ORDER", severity: "CRITICAL", clientOrderId: order.clientOrderId, detail: "Externe Order ist im internen Journal unbekannt" });
