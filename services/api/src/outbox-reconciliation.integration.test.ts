@@ -50,13 +50,13 @@ suite("outbox reconciliation (PostgreSQL)", () => {
         {
           eventType: "test.reconciliation.window",
           aggregateId: `reconciliation-window-a-${process.pid}-${Date.now()}`,
-          payload: { marker: "first" }, status: "PENDING", createdAt,
+          payload: { marker: "first" }, status: "PUBLISHED", publishedAt: null, createdAt,
           availableAt: createdAt,
         },
         {
           eventType: "test.reconciliation.window",
           aggregateId: `reconciliation-window-b-${process.pid}-${Date.now()}`,
-          payload: { marker: "second" }, status: "PENDING", createdAt,
+          payload: { marker: "second" }, status: "PUBLISHED", publishedAt: null, createdAt,
           availableAt: createdAt,
         },
       ],
@@ -71,12 +71,13 @@ suite("outbox reconciliation (PostgreSQL)", () => {
       since: createdAt, limit: 1, now: createdAt,
     });
     expect(limited.scanned).toBe(1);
-    expect(limited.findings).toHaveLength(0);
+    expect(limited.findings).toEqual([expect.objectContaining({ code: "PUBLISHED_TIMESTAMP_MISSING", eventId: ordered[0].id })]);
 
     const complete = await reconcileOutbox(prisma, {
       since: createdAt, limit: 2, now: createdAt,
     });
     expect(complete.scanned).toBe(2);
+    expect(complete.findings.map((finding) => finding.eventId).sort()).toEqual(ordered.map((item) => item.id).sort());
     const after = await prisma.outboxEvent.findMany({
       where: { id: { in: ids } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
