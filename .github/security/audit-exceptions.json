@@ -1,15 +1,5 @@
 {
-  "policy": "Every high or critical advisory fails CI. An entry here is only accepted while the advisory has no patched release and the documented expiry has not passed; the gate re-checks the advisory and fails as soon as upstream publishes a fix, so no exception survives a real upgrade.",
+  "policy": "Every high or critical advisory fails CI. An entry here is only accepted while the advisory has no patched release and the documented expiry has not passed; the gate re-checks the advisory and fails as soon as upstream publishes a fix, so no exception survives a real upgrade. Currently no exception is needed: picomatch GHSA-fc5q-39xc-vjpf is no longer reported by npm audit and effect GHSA-7589-6fvf-x4pw is patched via the effect override in the root package.json.",
   "maintained_by": "AutonomAgent maintainers",
-  "exceptions": [
-    {
-      "id": "GHSA-fc5q-39xc-vjpf",
-      "package": "picomatch",
-      "severity": "high",
-      "title": "picomatch ReDoS through single-branch repeated extglobs",
-      "reason": "Affects every published picomatch version (<= 4.0.7), so no upgrade path exists. The vulnerable code path is only reachable through glob patterns; the repo globs fixed, hand-written paths during build and test, never untrusted patterns. Reached transitively via fdir/tinyglobby, @expo/cli, vite and vitest, which is why npm audit reports 27 high package entries for one root advisory.",
-      "tracking": "https://github.com/niknight1403/Vision/issues/15",
-      "expires_on": "2026-12-18"
-    }
-  ]
+  "exceptions": []
 }
