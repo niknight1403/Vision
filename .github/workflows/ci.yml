@@ -67,7 +67,35 @@ jobs:
           VISION_WORKER_TOKEN: ci-vision-worker-token-not-a-secret
           VISION_ALLOWED_IMAGE_HOSTS: images.example.com
           AUTH_SIGNING_SECRET: ci-auth-signing-secret-not-a-secret
-        run: docker compose -f infra/docker-compose.yml config --quiet
+        run: |
+          docker compose -f infra/docker-compose.yml config --quiet
+          docker compose -f infra/docker-compose.yml config --format json | node -e '
+            let input = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", chunk => input += chunk);
+            process.stdin.on("end", () => {
+              const assert = require("node:assert/strict");
+              const config = JSON.parse(input);
+              const networks = service => Object.keys(config.services[service].networks ?? {});
+              const includes = (service, expected) => assert.ok(networks(service).includes(expected), service + " must join " + expected);
+              const excludes = (service, forbidden) => assert.ok(!networks(service).includes(forbidden), service + " must not join " + forbidden);
+              includes("postgres", "data");
+              includes("redis", "data");
+              excludes("postgres", "control");
+              excludes("redis", "control");
+              includes("ollama", "model");
+              excludes("ollama", "data");
+              excludes("ollama", "control");
+              includes("api", "data");
+              includes("api", "control");
+              includes("agent-worker", "data");
+              includes("agent-worker", "control");
+              includes("vision-worker", "control");
+              includes("vision-worker", "model");
+              excludes("vision-worker", "data");
+              console.log("Compose network isolation assertions passed.");
+            });
+          '
       - name: Validate Expo dependency compatibility
         working-directory: apps/mobile
         run: npx expo-doctor
