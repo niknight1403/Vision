@@ -640,6 +640,53 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
   });
 
 
+  it("dead-letters a failed active handler before graceful shutdown returns", async () => {
+    const aggregateId = `outbox-graceful-drain-failure-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.graceful-drain.failure", aggregateId, payload: { test: true },
+    } });
+
+    const controller = new AbortController();
+    let signalEntered!: () => void;
+    let releaseHandler!: () => void;
+    const handlerEntered = new Promise<void>((resolve) => { signalEntered = resolve; });
+    const handlerGate = new Promise<void>((resolve) => { releaseHandler = resolve; });
+    const runner = runOutboxWorker(
+      prisma,
+      {
+        workerId: "worker-graceful-drain-failure",
+        leaseSeconds: 30,
+        maxAttempts: 1,
+        eventTypes: ["test.graceful-drain.failure"],
+      },
+      async () => {
+        signalEntered();
+        await handlerGate;
+        throw new Error("Authorization: Bearer graceful-drain-test-secret");
+      },
+      { signal: controller.signal, pollIntervalMs: 50 },
+    );
+
+    try {
+      await handlerEntered;
+      controller.abort();
+      releaseHandler();
+      await expect(runner).resolves.toEqual({ published: 0, retried: 0, deadLettered: 1 });
+    } finally {
+      releaseHandler();
+      await runner.catch(() => undefined);
+    }
+
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("DEAD_LETTER");
+    expect(current.attempts).toBe(1);
+    expect(current.lockedBy).toBeNull();
+    expect(current.leaseUntil).toBeNull();
+    expect(current.lastError).toContain("Authorization: [REDACTED]");
+    expect(current.lastError).not.toContain("graceful-drain-test-secret");
+  }, 15_000);
+
   it("stops claiming on shutdown and drains the active handler before returning", async () => {
     const suffix = `${process.pid}-${Date.now()}`;
     const aggregateId = `outbox-graceful-drain-${suffix}`;
