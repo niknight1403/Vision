@@ -7,7 +7,7 @@ The outbox provides at-least-once delivery, not exactly-once delivery. A handler
 ## State handling
 
 - `PENDING`: eligible when `availableAt <= now()`.
-- `PROCESSING`: owned by `lockedBy` until `leaseUntil`; an expired lease can be reclaimed.
+- `PROCESSING`: owned by `lockedBy` until `leaseUntil`; an expired lease or missing `leaseUntil` can be reclaimed. A worker may acknowledge success or failure only while its lease is still valid.
 - `PUBLISHED`: terminal success; do not replay automatically.
 - `DEAD_LETTER`: retry budget exhausted; preserve payload and diagnostic for investigation.
 
