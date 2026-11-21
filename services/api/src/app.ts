@@ -123,18 +123,33 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     );
   }
 
-  app.get("/health", async () => ({
-    status: "ok",
+  async function databaseReady(): Promise<boolean> {
+    try { await prisma.$queryRaw`SELECT 1`; return true; } catch { return false; }
+  }
+
+  app.get("/livez", async () => ({ status: "ok", service: "autonomagent-api" }));
+  app.get("/readyz", async (_request, reply) => {
+    const db = await databaseReady();
+    return reply.code(db ? 200 : 503).send({ status: db ? "ready" : "not_ready", database: db ? "reachable" : "unavailable", tradingReady: false });
+  });
+
+  app.get("/health", async (_request, reply) => {
+    const db = await databaseReady();
+    return reply.code(db ? 200 : 503).send({
+    status: db ? "ok" : "degraded",
     service: "autonomagent-api",
     tradingMode: config.tradingMode,
     liveTradingEnabled: config.liveTradingEnabled,
     testnetEnabled: config.testnetEnabled,
     emergencyStop: config.emergencyStop,
     tradingReady: false,
+    database: db ? "reachable" : "unavailable",
+    readiness: db,
     providerConfigured: Boolean(dependencies.providers?.list().length),
     providers: dependencies.providers?.list() ?? [],
     note: "Autonomous sourcing and analysis only; mutating marketplace actions require a reviewed adapter.",
-  }));
+  });
+  });
 
   app.post("/v1/auth/login", async (request, reply) => {
     const body = request.body as { email?: unknown; password?: unknown } | undefined;
