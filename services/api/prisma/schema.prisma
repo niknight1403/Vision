@@ -120,16 +120,17 @@ model WalletLedger {
   account       WalletAccount   @relation(fields: [accountId], references: [id])
   entryType     LedgerEntryType
   amountCents   BigInt
-  referenceId   String          @unique
+  referenceId   String
   reservationReferenceId String?
-  reservation   WalletLedger?   @relation("ReservationReleases", fields: [reservationReferenceId], references: [referenceId], onDelete: Restrict)
+  reservation   WalletLedger?   @relation("ReservationReleases", fields: [accountId, reservationReferenceId], references: [accountId, referenceId], onDelete: Restrict)
   releases      WalletLedger[] @relation("ReservationReleases")
   correlationId String?
   description   String
   createdAt     DateTime        @default(now())
 
+  @@unique([accountId, referenceId])
   @@index([accountId, createdAt])
-  @@index([reservationReferenceId])
+  @@index([accountId, reservationReferenceId])
   @@index([correlationId])
 }
 
