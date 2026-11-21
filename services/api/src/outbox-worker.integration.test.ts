@@ -394,7 +394,20 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(current.leaseUntil).toBeNull();
     expect(current.lastError).toBe("temporary downstream outage");
     expect(current.attempts).toBe(1);
-    expect(current.availableAt.getTime()).toBeGreaterThan(Date.now());
+
+    const [retryTiming] = await prisma.$queryRaw<Array<{
+      isFuture: boolean;
+      secondsUntilAvailable: number;
+    }>>`
+      SELECT
+        ("availableAt" > NOW()) AS "isFuture",
+        EXTRACT(EPOCH FROM ("availableAt" - NOW()))::float8 AS "secondsUntilAvailable"
+      FROM "OutboxEvent"
+      WHERE id = ${event.id}
+    `;
+    expect(retryTiming.isFuture).toBe(true);
+    expect(retryTiming.secondsUntilAvailable).toBeGreaterThan(0);
+    expect(retryTiming.secondsUntilAvailable).toBeLessThanOrEqual(5);
   });
   it("moves exhausted messages to dead letter and clears the lease", async () => {
     const aggregateId = `outbox-dead-letter-${process.pid}-${Date.now()}`;
