@@ -864,6 +864,50 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     )).toBe(true);
   }, 15_000);
 
+
+  it("wakes an idle polling worker promptly on shutdown without claiming unrelated work", async () => {
+    const aggregateId = `outbox-idle-abort-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const unrelated = await prisma.outboxEvent.create({
+      data: {
+        eventType: "test.idle-abort.unrelated",
+        aggregateId,
+        payload: { test: true },
+      },
+    });
+    const controller = new AbortController();
+    const runner = runOutboxWorker(
+      prisma,
+      {
+        workerId: "worker-idle-abort",
+        leaseSeconds: 30,
+        eventTypes: ["test.idle-abort.target"],
+      },
+      async () => {
+        throw new Error("worker must not claim an unrelated event");
+      },
+      { signal: controller.signal, pollIntervalMs: 5_000 },
+    );
+
+    try {
+      // Allow the first empty claim to enter its long polling wait.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const startedAt = Date.now();
+      controller.abort();
+      await expect(runner).resolves.toEqual({ published: 0, retried: 0, deadLettered: 0 });
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    } finally {
+      controller.abort();
+      await runner.catch(() => undefined);
+    }
+
+    const row = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: unrelated.id } });
+    expect(row.status).toBe("PENDING");
+    expect(row.attempts).toBe(0);
+    expect(row.lockedBy).toBeNull();
+    expect(row.leaseUntil).toBeNull();
+  }, 15_000);
+
 });
 
 if (!databaseEnabled) {
