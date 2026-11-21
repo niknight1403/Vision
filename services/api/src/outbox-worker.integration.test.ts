@@ -147,6 +147,58 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(current.attempts).toBe(1);
   });
 
+  it("dead-letters an expired worker lease when crash retries exhaust the attempt budget", async () => {
+    const aggregateId = `outbox-crash-budget-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.lease.crash-budget", aggregateId, payload: { test: true },
+    } });
+    await prisma.outboxEvent.update({
+      where: { id: event.id },
+      data: {
+        status: "PROCESSING",
+        attempts: 2,
+        lockedBy: "crashed-worker",
+        leaseUntil: new Date(Date.now() - 1_000),
+      },
+    });
+
+    const result = await processOneOutboxMessage(
+      prisma,
+      { workerId: "worker-after-crashes", maxAttempts: 2, eventTypes: ["test.lease.crash-budget"] },
+      async () => { throw new Error("handler must not run after exhausted crash budget"); },
+    );
+
+    expect(result).toBe("IDLE");
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("DEAD_LETTER");
+    expect(current.attempts).toBe(2);
+    expect(current.lockedBy).toBeNull();
+    expect(current.leaseUntil).toBeNull();
+    expect(current.lastError).toBe("Retry budget exhausted after worker lease expiry");
+  });
+
+  it("dead-letters pending events already at the attempt limit without invoking the handler", async () => {
+    const aggregateId = `outbox-pending-budget-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.pending.crash-budget", aggregateId, payload: { test: true }, attempts: 2,
+    } });
+
+    const result = await processOneOutboxMessage(
+      prisma,
+      { workerId: "worker-pending-budget", maxAttempts: 2, eventTypes: ["test.pending.crash-budget"] },
+      async () => { throw new Error("handler must not run for exhausted pending event"); },
+    );
+
+    expect(result).toBe("IDLE");
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("DEAD_LETTER");
+    expect(current.attempts).toBe(2);
+    expect(current.lockedBy).toBeNull();
+    expect(current.leaseUntil).toBeNull();
+  });
+
   it("rejects success acknowledgement after its lease expires without a takeover", async () => {
     const aggregateId = `outbox-expired-success-${process.pid}-${Date.now()}`;
     aggregateIds.push(aggregateId);
