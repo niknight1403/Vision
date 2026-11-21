@@ -43,7 +43,7 @@ export async function claimOutboxMessage(prisma: PrismaClient, options: WorkerOp
   const eventTypeFilter = options.eventTypes?.length
     ? Prisma.sql`AND "eventType" IN (${Prisma.join(options.eventTypes)})`
     : Prisma.empty;
-  const rows = await prisma.$queryRaw<OutboxMessage[]>(Prisma.sql`
+  const rows = await prisma.$queryRaw<ClaimedOutboxMessage[]>(Prisma.sql`
     WITH candidate AS (
       SELECT id FROM "OutboxEvent"
       WHERE (
