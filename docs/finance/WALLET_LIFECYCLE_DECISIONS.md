@@ -328,3 +328,10 @@ This is integration-test and documentation coverage only. No production worker b
 PostgreSQL integration coverage now models a worker crash after the consumer transaction committed its durable inbox receipt but before the outbox acknowledgement. The fixture starts in PROCESSING with an expired lease and an existing receipt. A replacement worker must reclaim the event, skip the consumer handler because the receipt already exists, and acknowledge it as PUBLISHED without duplicating the receipt or database effect.
 
 This verifies the database-only at-least-once recovery boundary. It does not claim exactly-once delivery for remote side effects and does not change production worker behavior, schema, wallet/journal state, payment behavior, or external effects.
+
+
+## Sprint 3.30 — concurrent outbox worker claim
+
+PostgreSQL integration coverage now holds the first worker inside its transactional inbox handler while a second worker attempts to claim the same eligible event. The second worker must return IDLE while the first lease is active. The test then releases the first worker and verifies a single handler invocation, one durable receipt, one database effect, and one successful publication.
+
+This proves the database claim boundary for two concurrent workers against PostgreSQL. It does not imply exactly-once external effects and introduces no production worker, schema, wallet/journal, payment, or external-side-effect changes.
