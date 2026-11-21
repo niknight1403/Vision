@@ -16,6 +16,14 @@ suite("outbox reconciliation (PostgreSQL)", () => {
     await prisma.$disconnect();
   });
 
+  it("rejects limits outside the supported bounded range", async () => {
+    await expect(reconcileOutbox(prisma, { limit: 0 })).rejects.toThrow("INVALID_RECONCILIATION_LIMIT");
+    await expect(reconcileOutbox(prisma, { limit: -1 })).rejects.toThrow("INVALID_RECONCILIATION_LIMIT");
+    await expect(reconcileOutbox(prisma, { limit: 1.5 })).rejects.toThrow("INVALID_RECONCILIATION_LIMIT");
+    await expect(reconcileOutbox(prisma, { limit: 10_001 })).rejects.toThrow("INVALID_RECONCILIATION_LIMIT");
+    await expect(reconcileOutbox(prisma, { limit: 10_000 })).resolves.toEqual(expect.objectContaining({ scanned: expect.any(Number) }));
+  });
+
   it("reports a missing required receipt without mutating the event", async () => {
     const event = await prisma.outboxEvent.create({ data: {
       eventType: "test.reconciliation.receipt",
