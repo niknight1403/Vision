@@ -4,7 +4,7 @@ Audit basis: finance branch `finance/sprint-3-double-entry-ledger`, reviewed 202
 
 ## Verified producer path
 
-The only producer path identified in the reviewed finance branch is `enqueueOutboxEvent(tx, input)` in `services/api/src/outbox-service.ts`. It inserts one `OutboxEvent` using the caller's transaction. It currently accepts event type, aggregate id, optional correlation id, schema version, payload, and optional availability time. It does not resolve a recipient set or create delivery rows.
+Der gemeinsame Producer-Pfad ist `enqueueOutboxEvent(tx, input)` in `services/api/src/outbox-service.ts`. Er schreibt ein `OutboxEvent` innerhalb der übergebenen Transaktion und validiert Event-Typ, Aggregate-ID und Schema-Version. Auf dem aktuellen PR-Head verwenden Wallet-Service, Agent-Task-Service und die Treasure-Analysis-Route diesen Helper. Er löst weiterhin keine Empfänger auf und erzeugt keine Delivery-Zeilen.
 
 The reviewed wallet service calls it in the same transaction as the wallet ledger mutation:
 
@@ -58,7 +58,7 @@ Zusätzliche Treffer der GitHub-Code-Suche (Default-Branch-Index; Quellpfade ans
 | `agent.task.cancelled` | `cancelAgentTask` | Abbruch + Event in derselben Prisma-Transaktion | taskId; tenantId fehlt im Event-Payload |
 | `hidden_treasure.analysis.requested` | direkte Erstellung in `services/api/src/app.ts` | AgentTask-Erstellung + Event in derselben Prisma-Transaktion | taskId, taskType; tenantId fehlt im Event-Payload |
 
-Die acht Task-Event-Typen oben sind aus dem geprüften Service-Code abgeleitet; `retry_scheduled` und `failed` haben zwei Erzeugungspfade. Der direkte Treasure-Analysis-Endpunkt verwendet aktuell einen eigenen Event-Schreibpfad statt `enqueueOutboxEvent`.
+Die acht Task-Event-Typen oben sind aus dem geprüften Service-Code abgeleitet; `retry_scheduled` und `failed` haben zwei Erzeugungspfade. Der Treasure-Analysis-Endpunkt verwendet auf dem aktuellen PR-Head den gemeinsamen Helper `enqueueOutboxEvent(tx, ...)` innerhalb derselben Transaktion wie die AgentTask-Erstellung.
 
 ### Multi-Tenant-Befund
 
@@ -123,9 +123,9 @@ Die Event-Typen wurden nach ihrem tatsächlichen Zweck im geprüften Code eingeo
 
 ### Event-Vertrag und Producer-Konsistenz
 
-- `OutboxEvent.schemaVersion` hat Datenbank-Default `1`. Der direkte Producer in `app.ts` lässt das Feld weg; Task-Service und Wallet-Service schreiben über unterschiedliche Pfade. Das funktioniert mit dem aktuellen Default, aber die Event-Erzeugung ist nicht zentral validiert.
+- `OutboxEvent.schemaVersion` hat Datenbank-Default `1`. Der gemeinsame Helper setzt/validiert die Schema-Version zentral; Task-Service, Treasure-Analysis-Route und Wallet-Service nutzen auf dem aktuellen PR-Head denselben Helper.
 - `enqueueOutboxEvent(tx, input)` validiert nichtleere Event-Typen/Aggregate-IDs und positive ganzzahlige Schema-Versionen und schreibt innerhalb der übergebenen Transaktion.
-- Der Task-Service verwendet derzeit einen eigenen lokalen `emit`-Helper mit direktem `outboxEvent.create`; die Treasure-Analysis-Route schreibt ebenfalls direkt. Eine spätere Konsolidierung sollte alle Producer über den gemeinsamen Helper führen, ohne Transaktionsgrenzen zu verändern.
+- Der Task-Service delegiert seinen Lifecycle-`emit`-Helper an `enqueueOutboxEvent(tx, ...)`; die Treasure-Analysis-Route ruft denselben Helper innerhalb ihrer bestehenden Transaktion auf. Die Transaktionsgrenzen und Event-Payloads bleiben erhalten.
 - Der Wallet-Payload enthält tenantId, Task-Lifecycle-Payloads nicht. Bei Task-Events ist die Datenbankrelation `AgentTask.tenantId` maßgeblich; bei Wallet-Events `WalletAccount.tenantId`.
 - Keine dieser Event-Klassen besitzt aktuell einen bestätigten produktiven Consumer-Startpfad. Diese Tabelle ist eine Architekturentscheidung für die nächste Umsetzung, keine Aktivierungsfreigabe.
 
