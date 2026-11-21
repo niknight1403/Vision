@@ -175,6 +175,42 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
   });
 
 
+  it("recovers a committed inbox receipt after worker crash and expired lease", async () => {
+    const aggregateId = `outbox-inbox-crash-recovery-${process.pid}-${Date.now()}`;
+    aggregateIds.push(aggregateId);
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.inbox.worker.crash-recovery",
+      aggregateId,
+      payload: { test: true },
+      status: "PROCESSING",
+      attempts: 1,
+      lockedBy: "worker-crashed-before-ack",
+      leaseUntil: new Date(Date.now() - 60_000),
+    } });
+    await prisma.outboxConsumerReceipt.create({ data: {
+      consumerName: "integration-crash-recovery",
+      eventId: event.id,
+    } });
+
+    const result = await processOneOutboxMessageWithInbox(
+      prisma,
+      { workerId: "worker-after-restart", eventTypes: ["test.inbox.worker.crash-recovery"] },
+      "integration-crash-recovery",
+      async () => { throw new Error("COMMITTED_RECEIPT_MUST_SKIP_HANDLER"); },
+    );
+
+    expect(result).toBe("PUBLISHED");
+    const current = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(current.status).toBe("PUBLISHED");
+    expect(current.attempts).toBe(2);
+    expect(current.lockedBy).toBeNull();
+    expect(current.leaseUntil).toBeNull();
+    expect(await prisma.outboxConsumerReceipt.count({
+      where: { eventId: event.id, consumerName: "integration-crash-recovery" },
+    })).toBe(1);
+  });
+
+
   it("dead-letters an exhausted inbox consumer failure without retaining its receipt or credentials", async () => {
     const aggregateId = `outbox-inbox-dead-letter-${process.pid}-${Date.now()}`;
     aggregateIds.push(aggregateId);

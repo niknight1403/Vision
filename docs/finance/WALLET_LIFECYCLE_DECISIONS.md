@@ -321,3 +321,10 @@ This is test and documentation coverage only. No production behavior, database s
 PostgreSQL integration coverage now verifies the inbox-enabled worker's exhausted-attempt path: a consumer transaction failure rolls back its receipt, transitions the event to DEAD_LETTER at the configured attempt limit, clears the lease, and persists only sanitized error details. The test uses synthetic credentials and asserts that neither value survives in the stored error.
 
 This is integration-test and documentation coverage only. No production worker behavior, schema, event dispatch, wallet/journal state, payment behavior, or external side effect is changed.
+
+
+## Sprint 3.29 — inbox crash recovery after consumer commit
+
+PostgreSQL integration coverage now models a worker crash after the consumer transaction committed its durable inbox receipt but before the outbox acknowledgement. The fixture starts in PROCESSING with an expired lease and an existing receipt. A replacement worker must reclaim the event, skip the consumer handler because the receipt already exists, and acknowledge it as PUBLISHED without duplicating the receipt or database effect.
+
+This verifies the database-only at-least-once recovery boundary. It does not claim exactly-once delivery for remote side effects and does not change production worker behavior, schema, wallet/journal state, payment behavior, or external effects.
