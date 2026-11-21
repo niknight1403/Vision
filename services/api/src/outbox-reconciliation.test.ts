@@ -122,4 +122,19 @@ describe("read-only outbox reconciliation", () => {
       ]);
   });
 
+
+  it("does not report a receipt-backed consumer repeated in configuration", () => {
+    const report = reconcileOutboxEvents(
+      [event({ consumerReceipts: [{ consumerName: "ledger-projection", processedAt: now }] })],
+      { "wallet.reservation.created": ["ledger-projection", "ledger-projection", "audit"] },
+      { now },
+    );
+
+    expect(report.findings.filter((finding) => finding.code === "REQUIRED_RECEIPT_MISSING"))
+      .toEqual([{
+        code: "REQUIRED_RECEIPT_MISSING", severity: "CRITICAL",
+        eventId: "event-1", eventType: "wallet.reservation.created", consumerName: "audit",
+      }]);
+  });
+
 });
