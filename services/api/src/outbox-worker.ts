@@ -94,12 +94,12 @@ export function sanitizeOutboxError(error: unknown): string {
 async function markFailed(prisma: PrismaClient, message: ClaimedOutboxMessage, options: WorkerOptions, error: unknown): Promise<void> {
   const dead = message.attempts >= (options.maxAttempts ?? 8);
   const detail = sanitizeOutboxError(error);
-  const availableAt = new Date(Date.now() + retryDelaySeconds(message.attempts, options.baseRetrySeconds) * 1000);
-  // Keep the ownership check on the database clock to avoid host clock skew.
+  const retrySeconds = retryDelaySeconds(message.attempts, options.baseRetrySeconds);
+  // Use PostgreSQL time for both lease ownership and retry eligibility.
   const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     UPDATE "OutboxEvent"
     SET status = ${dead ? "DEAD_LETTER" : "PENDING"}::"OutboxStatus",
-        "availableAt" = ${availableAt}, "leaseUntil" = NULL,
+        "availableAt" = NOW() + (${retrySeconds} * INTERVAL '1 second'), "leaseUntil" = NULL,
         "lockedBy" = NULL, "lastError" = ${detail.slice(0, 2000)}
     WHERE id = ${message.id} AND status = 'PROCESSING'
       AND "lockedBy" = ${message.claimToken} AND "leaseUntil" > NOW()
