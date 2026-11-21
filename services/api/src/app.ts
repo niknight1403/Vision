@@ -4,7 +4,7 @@ import helmet from "@fastify/helmet";
 import cors from "@fastify/cors";
 import type { DealCandidate, PrismaClient } from "@prisma/client";
 import { config } from "./config.js";
-import { authenticateBearerToken, requireAdmin, type AuthenticatedPrincipal } from "./auth-service.js";
+import { authenticateBearerToken, requireAdmin, requireOperator, type AuthenticatedPrincipal } from "./auth-service.js";
 import { loginWithPassword, revokeRefreshToken, rotateRefreshToken } from "./auth-session-service.js";
 import { listDealCandidates, reviewDealCandidate } from "./deal-candidate-service.js";
 import { runAndPersistDealScan } from "./deal-scan-service.js";
@@ -34,6 +34,8 @@ const STATUS_BY_ERROR: Readonly<Record<string, number>> = Object.freeze({
   AUTH_TOKEN_INVALID: 401,
   AUTH_TOKEN_EXPIRED_OR_NOT_ACTIVE: 401,
   AUTHENTICATED_USER_UNAVAILABLE: 401,
+  OPERATOR_ROLE_REQUIRED: 403,
+  OPERATIONS_DATABASE_UNAVAILABLE: 503,
   INVALID_CREDENTIALS: 401,
   INVALID_REFRESH_TOKEN: 401,
   REFRESH_TOKEN_REUSE_OR_RACE: 401,
@@ -367,11 +369,33 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     }
   });
 
-  app.get("/v1/operations/overview", async (_request, reply) => {
-    return reply.code(503).send({
-      error: "BACKEND_NOT_READY",
-      message: "Operations data is unavailable until authenticated sessions are configured.",
-    });
+  app.get("/v1/operations/overview", async (request, reply) => {
+    try {
+      const principal = await principalFrom(request);
+      requireOperator(principal);
+      const [pendingTasks, runningTasks, failedTasks, pendingOutbox, processingOutbox, deadLetters, blockedKillSwitches] = await Promise.all([
+        prisma.agentTask.count({ where: { status: "QUEUED" } }),
+        prisma.agentTask.count({ where: { status: "RUNNING" } }),
+        prisma.agentTask.count({ where: { status: "FAILED" } }),
+        prisma.outboxEvent.count({ where: { status: "PENDING" } }),
+        prisma.outboxEvent.count({ where: { status: "PROCESSING" } }),
+        prisma.outboxEvent.count({ where: { status: "DEAD_LETTER" } }),
+        prisma.testnetKillSwitch.count({ where: { state: { not: "ARMED" } } }),
+      ]);
+      return reply.code(200).send({
+        status: "OBSERVED", readOnly: true,
+        config: { tradingMode: config.tradingMode, liveTradingEnabled: false, testnetEnabled: false, emergencyStop: config.emergencyStop },
+        providers: (dependencies.providers?.list() ?? []).map(({ providerId, displayName, capabilities, simulated }) => ({ providerId, displayName, capabilities, simulated })),
+        queue: { pendingTasks, runningTasks, failedTasks },
+        outbox: { pending: pendingOutbox, processing: processingOutbox, deadLetters },
+        killSwitch: { blockedScopes: blockedKillSwitches, failClosed: true },
+        database: { reachable: true },
+      });
+    } catch (error) {
+      const code = errorCode(error);
+      if (["AUTHENTICATION_REQUIRED", "AUTH_TOKEN_INVALID", "AUTH_TOKEN_EXPIRED_OR_NOT_ACTIVE", "AUTHENTICATED_USER_UNAVAILABLE", "AUTH_SIGNING_SECRET_NOT_CONFIGURED", "OPERATOR_ROLE_REQUIRED"].includes(code)) return fail(reply, error);
+      return fail(reply, new Error("OPERATIONS_DATABASE_UNAVAILABLE"));
+    }
   });
 
   app.setNotFoundHandler(async (_request, reply) => {

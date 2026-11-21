@@ -89,4 +89,8 @@ export function requireAdmin(principal: AuthenticatedPrincipal): void {
   if (principal.role !== "ADMIN") throw new Error("ADMIN_ROLE_REQUIRED");
 }
 
+export function requireOperator(principal: AuthenticatedPrincipal): void {
+  if (principal.role !== "ADMIN" && principal.role !== "OPERATOR") throw new Error("OPERATOR_ROLE_REQUIRED");
+}
+
 export const authTokenContract = Object.freeze({ issuer: ISSUER, audience: AUDIENCE, maxLifetimeSeconds: 900 });
