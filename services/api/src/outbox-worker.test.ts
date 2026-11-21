@@ -22,3 +22,24 @@ describe("outbox retry policy", () => {
     expect(() => retryDelaySeconds(1, Number.NaN)).toThrow("INVALID_BASE_RETRY_SECONDS");
   });
 });
+
+
+describe("outbox worker drain runner", () => {
+  it("does not claim work when shutdown has already started", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const prisma = {} as import("@prisma/client").PrismaClient;
+    await expect(runOutboxWorker(prisma, { workerId: "drain-test" }, async () => {
+      throw new Error("handler must not run");
+    }, { signal: controller.signal })).resolves.toEqual({
+      published: 0, retried: 0, deadLettered: 0,
+    });
+  });
+
+  it("rejects invalid polling intervals before touching the database", async () => {
+    const prisma = {} as import("@prisma/client").PrismaClient;
+    await expect(runOutboxWorker(prisma, { workerId: "drain-test" }, async () => undefined, {
+      signal: new AbortController().signal, pollIntervalMs: 0,
+    })).rejects.toThrow("INVALID_POLL_INTERVAL_MS");
+  });
+});
