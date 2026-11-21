@@ -63,10 +63,38 @@ suite("wallet-to-journal reconciliation (PostgreSQL)", () => {
     expect(drift.differences.map((item) => item.field)).toContain("journalReservedVsWalletReserved");
   });
 
-  it("does not reveal a wallet through a mismatched tenant or owner", async () => {
+  it("rejects an existing wallet when either tenant or owner scope is mismatched", async () => {
+    const tenant = await prisma.tenant.create({ data: { name: "Wallet scope isolation fixture" } });
+    const otherTenant = await prisma.tenant.create({ data: { name: "Other wallet scope fixture" } });
+    const wallet = await prisma.walletAccount.create({
+      data: {
+        tenantId: tenant.id,
+        ownerId: `scope-owner-${process.pid}-${Date.now()}`,
+        currency: "EUR",
+        balanceCents: 9_000n,
+        reservedCents: 0n,
+      },
+    });
+
     await expect(reconcileWalletJournal(prisma, {
-      tenantId: "other-tenant", ownerId: "other-owner", accountId: "unknown-wallet",
+      tenantId: otherTenant.id,
+      ownerId: wallet.ownerId,
+      accountId: wallet.id,
     })).rejects.toThrow("WALLET_NOT_FOUND");
+
+    await expect(reconcileWalletJournal(prisma, {
+      tenantId: tenant.id,
+      ownerId: "different-owner",
+      accountId: wallet.id,
+    })).rejects.toThrow("WALLET_NOT_FOUND");
+
+    const correctlyScoped = await reconcileWalletJournal(prisma, {
+      tenantId: tenant.id,
+      ownerId: wallet.ownerId,
+      accountId: wallet.id,
+    });
+    expect(correctlyScoped.accountId).toBe(wallet.id);
+    expect(correctlyScoped.tenantId).toBe(tenant.id);
   });
 });
 
