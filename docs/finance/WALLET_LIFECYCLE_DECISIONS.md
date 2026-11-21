@@ -335,3 +335,10 @@ This verifies the database-only at-least-once recovery boundary. It does not cla
 PostgreSQL integration coverage now holds the first worker inside its transactional inbox handler while a second worker attempts to claim the same eligible event. The second worker must return IDLE while the first lease is active. The test then releases the first worker and verifies a single handler invocation, one durable receipt, one database effect, and one successful publication.
 
 This proves the database claim boundary for two concurrent workers against PostgreSQL. It does not imply exactly-once external effects and introduces no production worker, schema, wallet/journal, payment, or external-side-effect changes.
+
+
+## Sprint 3.31 — unique outbox lease fencing tokens
+
+Outbox claims now persist a unique per-claim token composed from the worker identity and a fresh UUID. A worker must present that exact token to acknowledge publication or schedule failure. Reusing a worker ID after a lease expires therefore cannot let an earlier, still-running attempt overwrite the newer claim.
+
+PostgreSQL integration coverage expires a live lease while its handler is held, reclaims it with the same worker ID, and proves the stale attempt receives OUTBOX_LEASE_LOST while the replacement claim remains PROCESSING. The replacement then completes publication. This is a database lease-fencing guarantee, not exactly-once delivery for remote effects.
