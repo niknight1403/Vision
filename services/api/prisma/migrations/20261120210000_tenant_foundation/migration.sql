@@ -43,11 +43,9 @@ FROM "User" u;
 
 ALTER TABLE "WalletAccount" ADD COLUMN "tenantId" TEXT;
 UPDATE "WalletAccount" w SET "tenantId" = 'personal_' || w."ownerId";
-ALTER TABLE "WalletAccount" ALTER COLUMN "tenantId" SET NOT NULL;
 
 ALTER TABLE "AgentTask" ADD COLUMN "tenantId" TEXT;
 UPDATE "AgentTask" t SET "tenantId" = 'personal_' || t."ownerId";
-ALTER TABLE "AgentTask" ALTER COLUMN "tenantId" SET NOT NULL;
 
 -- Preserve historical global review state as evidence; never convert it to tenant approvals.
 CREATE TABLE "LegacyDealReviewState" (
@@ -73,11 +71,9 @@ CREATE TABLE "DealReview" (
   CONSTRAINT "DealReview_pkey" PRIMARY KEY ("id")
 );
 
-DROP INDEX "WalletAccount_ownerId_currency_key";
 CREATE UNIQUE INDEX "WalletAccount_tenantId_ownerId_currency_key" ON "WalletAccount"("tenantId", "ownerId", "currency");
 CREATE INDEX "WalletAccount_tenantId_createdAt_idx" ON "WalletAccount"("tenantId", "createdAt");
 
-DROP INDEX "AgentTask_idempotencyKey_key";
 CREATE UNIQUE INDEX "AgentTask_tenantId_idempotencyKey_key" ON "AgentTask"("tenantId", "idempotencyKey");
 CREATE INDEX "AgentTask_tenantId_createdAt_idx" ON "AgentTask"("tenantId", "createdAt");
 
