@@ -35,8 +35,8 @@ describe("read-only outbox reconciliation", () => {
       event({ id: "unexpected", status: "PENDING", lockedBy: "worker-b", leaseUntil: null, publishedAt: null, availableAt: now }),
     ], {}, { now });
     expect(report.findings.map((finding) => [finding.eventId, finding.code])).toEqual([
-      ["incomplete", "PROCESSING_LEASE_INCOMPLETE"],
       ["expired", "EXPIRED_LEASE"],
+      ["incomplete", "PROCESSING_LEASE_INCOMPLETE"],
       ["unexpected", "UNEXPECTED_LOCK"],
     ]);
   });
@@ -48,8 +48,8 @@ describe("read-only outbox reconciliation", () => {
       event({ id: "old-pending", status: "PENDING", publishedAt: null, availableAt: new Date("2026-11-20T11:00:00.000Z") }),
     ], {}, { now, pendingWarningSeconds: 60 });
     expect(report.findings.map((finding) => [finding.eventId, finding.code])).toEqual([
-      ["no-published-at", "PUBLISHED_TIMESTAMP_MISSING"],
       ["dead", "DEAD_LETTER"],
+      ["no-published-at", "PUBLISHED_TIMESTAMP_MISSING"],
       ["old-pending", "PENDING_OVERDUE"],
     ]);
   });
