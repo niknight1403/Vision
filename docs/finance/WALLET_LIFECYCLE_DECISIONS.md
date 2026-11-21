@@ -249,3 +249,13 @@ The PostgreSQL integration coverage now creates a real wallet under one tenant a
 The positive control confirms that the correct tenant/owner/account tuple still resolves the wallet. This closes a test-quality gap in the earlier negative case, which used an unknown wallet ID and therefore did not prove isolation against an existing record.
 
 The implementation remains unchanged: `reconcileWalletJournal` resolves the wallet with the complete `(id, tenantId, ownerId)` predicate, then scopes journal balance reads by tenant. No wallet, ledger, journal, or outbox mutation is added; no accounting mapping or payment lifecycle is enabled.
+
+
+## Sprint 3.20 — outbox reconciliation boundary coverage
+
+The pure reconciliation tests now pin the time-boundary semantics:
+- A processing lease expiring exactly at the supplied `now` is not yet classified as expired; expiry is strictly earlier than `now`.
+- A pending event exactly at its warning threshold is not overdue; the age must be strictly greater than the configured threshold.
+- A zero-second threshold reports an event that is already due, and non-finite thresholds are rejected.
+
+The PostgreSQL integration suite also verifies that the bounded outbox scan rejects zero, negative, fractional, and over-maximum limits, while accepting the configured maximum of 10,000. This is validation coverage only; the scan remains metadata-only and read-only. No worker lease, event status, payload, wallet, journal, or payment behavior is changed.
