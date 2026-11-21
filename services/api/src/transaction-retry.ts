@@ -25,8 +25,8 @@ export async function runSerializableTransaction<T>(
   operation: (tx: Prisma.TransactionClient) => Promise<T>,
   options: SerializableRetryOptions = {},
 ): Promise<T> {
-  const maxAttempts = options.maxAttempts ?? 3;
-  const baseDelayMs = options.baseDelayMs ?? 25;
+  const maxAttempts = options.maxAttempts ?? 5;
+  const baseDelayMs = options.baseDelayMs ?? 50;
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10) {
     throw new Error("INVALID_SERIALIZABLE_RETRY_ATTEMPTS");
   }
