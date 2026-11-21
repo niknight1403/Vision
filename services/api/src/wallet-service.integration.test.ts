@@ -296,6 +296,32 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
     })).toBe(1);
   });
 
+  it("rejects reuse of a wallet idempotency key across tenant accounts", async () => {
+    const otherTenant = await prisma.tenant.create({ data: { name: "Second wallet tenant" } });
+    const otherAccount = await prisma.walletAccount.create({
+      data: { ownerId: "second-tenant-owner", tenantId: otherTenant.id, currency: "EUR", balanceCents: 10_000n },
+    });
+    const referenceId = "wallet-global-idempotency-scope";
+    try {
+      await reserveFunds(prisma, {
+        accountId, ...walletScope(), amountCents: 1_000n, referenceId,
+        description: "first tenant reservation",
+      });
+      await expect(reserveFunds(prisma, {
+        accountId: otherAccount.id, ownerId: "second-tenant-owner", tenantId: otherTenant.id,
+        amountCents: 1_000n, referenceId, description: "second tenant reservation",
+      })).rejects.toThrow("IDEMPOTENCY_CONFLICT");
+
+      expect(await prisma.walletLedger.count({ where: { referenceId } })).toBe(1);
+      expect((await prisma.walletAccount.findUniqueOrThrow({ where: { id: otherAccount.id } })).reservedCents).toBe(0n);
+    } finally {
+      await prisma.outboxEvent.deleteMany({ where: { aggregateId: otherAccount.id } });
+      await prisma.walletLedger.deleteMany({ where: { accountId: otherAccount.id } });
+      await prisma.walletAccount.delete({ where: { id: otherAccount.id } });
+      await prisma.tenant.delete({ where: { id: otherTenant.id } });
+    }
+  });
+
   it("allows at most one concurrent full release", async () => {
     await reserveFunds(prisma, {
       accountId, ...walletScope(), amountCents: 2_000n, referenceId: "reservation-race", description: "reservation",
