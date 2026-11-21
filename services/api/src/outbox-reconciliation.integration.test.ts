@@ -51,6 +51,37 @@ suite("outbox reconciliation (PostgreSQL)", () => {
     expect(unchanged.publishedAt).not.toBeNull();
   });
 
+  it("does not report a required receipt when the consumer receipt exists", async () => {
+    const event = await prisma.outboxEvent.create({ data: {
+      eventType: "test.reconciliation.receipt.present",
+      aggregateId: `reconciliation-receipt-present-${process.pid}-${Date.now()}`,
+      payload: { marker: "receipt-present" },
+      status: "PUBLISHED",
+      publishedAt: new Date(),
+    } });
+    ids.push(event.id);
+    await prisma.outboxConsumerReceipt.create({ data: {
+      eventId: event.id,
+      consumerName: "ledger-projection",
+    } });
+
+    const report = await reconcileOutbox(prisma, {
+      expectedConsumers: { "test.reconciliation.receipt.present": ["ledger-projection"] },
+    });
+
+    expect(report.findings).not.toContainEqual(expect.objectContaining({
+      code: "REQUIRED_RECEIPT_MISSING",
+      eventId: event.id,
+      consumerName: "ledger-projection",
+    }));
+    expect(report.findings.some((finding) => finding.eventId === event.id)).toBe(false);
+    const receipt = await prisma.outboxConsumerReceipt.findUniqueOrThrow({
+      where: { consumerName_eventId: { consumerName: "ledger-projection", eventId: event.id } },
+    });
+    expect(receipt.eventId).toBe(event.id);
+    expect(receipt.consumerName).toBe("ledger-projection");
+  });
+
   it("applies since and limit deterministically and leaves selected events unchanged", async () => {
     const createdAt = new Date(Date.now() + 5_000);
     const fixtures = await prisma.outboxEvent.createManyAndReturn({
