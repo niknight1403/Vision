@@ -264,7 +264,7 @@ suite("wallet reservation release invariants (PostgreSQL)", () => {
       reserveFunds(prisma, input),
     ]);
 
-    expect(results.every((result) => result.status === "fulfilled")).toBe(true);
+    expect(results.map((result) => result.status === "fulfilled" ? "fulfilled" : String(result.reason))).toEqual(["fulfilled", "fulfilled"]);
     expect(await prisma.walletLedger.count({
       where: { accountId, referenceId: input.referenceId, entryType: "RESERVATION" },
     })).toBe(1);
