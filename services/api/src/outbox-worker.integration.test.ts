@@ -792,6 +792,78 @@ suite("outbox worker lease safety (PostgreSQL)", () => {
     expect(pendingRow.attempts).toBe(0);
   }, 15_000);
 
+
+  it("drains every active worker concurrently and leaves unclaimed work pending on shutdown", async () => {
+    const suffix = `${process.pid}-${Date.now()}`;
+    const aggregateIdsForTest = [0, 1, 2].map((index) => `outbox-parallel-drain-${suffix}-${index}`);
+    aggregateIds.push(...aggregateIdsForTest);
+    const events = await Promise.all(aggregateIdsForTest.map((aggregateId) =>
+      prisma.outboxEvent.create({
+        data: {
+          eventType: "test.graceful-drain.parallel",
+          aggregateId,
+          payload: { test: true },
+        },
+      }),
+    ));
+
+    const controllers = [new AbortController(), new AbortController()];
+    const gates: Promise<void>[] = [];
+    const releases: Array<() => void> = [];
+    for (let index = 0; index < 2; index += 1) {
+      gates.push(new Promise<void>((resolve) => { releases[index] = resolve; }));
+    }
+    let enteredCount = 0;
+    let signalBothEntered!: () => void;
+    const bothEntered = new Promise<void>((resolve) => { signalBothEntered = resolve; });
+    let settledWorkers = 0;
+    const runners = controllers.map((controller, index) =>
+      runOutboxWorker(
+        prisma,
+        {
+          workerId: `worker-parallel-graceful-drain-${index}`,
+          leaseSeconds: 30,
+          eventTypes: ["test.graceful-drain.parallel"],
+        },
+        async () => {
+          const gateIndex = enteredCount;
+          enteredCount += 1;
+          if (enteredCount === 2) signalBothEntered();
+          if (gateIndex > 1) throw new Error("worker claimed after shutdown barrier");
+          await gates[gateIndex];
+        },
+        { signal: controller.signal, pollIntervalMs: 50 },
+      ).finally(() => { settledWorkers += 1; }),
+    );
+
+    try {
+      await bothEntered;
+      controllers.forEach((controller) => controller.abort());
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(settledWorkers).toBe(0);
+      releases.forEach((release) => release());
+      await expect(Promise.all(runners)).resolves.toEqual([
+        { published: 1, retried: 0, deadLettered: 0 },
+        { published: 1, retried: 0, deadLettered: 0 },
+      ]);
+    } finally {
+      releases.forEach((release) => release());
+      await Promise.all(runners.map((runner) => runner.catch(() => undefined)));
+    }
+
+    const rows = await prisma.outboxEvent.findMany({
+      where: { id: { in: events.map((event) => event.id) } },
+    });
+    expect(rows.filter((event) => event.status === "PUBLISHED")).toHaveLength(2);
+    expect(rows.filter((event) => event.status === "PENDING")).toHaveLength(1);
+    expect(rows.filter((event) => event.status === "PENDING").every((event) =>
+      event.attempts === 0 && event.lockedBy === null && event.leaseUntil === null
+    )).toBe(true);
+    expect(rows.filter((event) => event.status === "PUBLISHED").every((event) =>
+      event.lockedBy === null && event.leaseUntil === null
+    )).toBe(true);
+  }, 15_000);
+
 });
 
 if (!databaseEnabled) {
