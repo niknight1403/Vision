@@ -33,6 +33,18 @@ class VisualInspection(BaseModel):
 class InspectionError(Exception):
     """A safe, user-displayable inspection failure."""
 
+def _llm_base_url() -> str:
+    configured = os.getenv("LLM_BASE_URL")
+    if not configured:
+        return "http://127.0.0.1:11434/v1"
+    parsed = urlsplit(configured)
+    allowed = {item.strip().lower().rstrip(".") for item in os.getenv("LLM_ALLOWED_HOSTS", "").split(",") if item.strip()}
+    if parsed.scheme != "https" or parsed.username or parsed.password or parsed.query or parsed.fragment or not parsed.hostname:
+        raise RuntimeError("LLM_BASE_URL must be an HTTPS endpoint without credentials, query, or fragment")
+    if not allowed or parsed.hostname.lower().rstrip(".") not in allowed:
+        raise RuntimeError("LLM_BASE_URL host is not in LLM_ALLOWED_HOSTS")
+    return configured
+
 
 def _validate_image_url(image_url: str, allowed_hosts: set[str]) -> str:
     parsed = urlsplit(image_url)
@@ -88,7 +100,7 @@ class VisionTreasureInspector:
         self._owns_openai_client = client is None
         self.client = client or AsyncOpenAI(
             api_key=os.getenv("LLM_API_KEY", "ollama"),
-            base_url=os.getenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1"),
+            base_url=_llm_base_url(),
             timeout=45.0,
             max_retries=1,
         )
