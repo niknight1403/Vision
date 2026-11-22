@@ -12,6 +12,7 @@
     "mobile": "npm run start --workspace @autonomagent/mobile",
     "android": "npm run android --workspace @autonomagent/mobile",
     "test": "npm run test --workspaces --if-present",
+    "test:python": "PYTHONPATH=services/vision-worker python3 -m pytest -q services/vision-worker/tests",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "audit:gate": "node scripts/audit-gate.mjs"
   },

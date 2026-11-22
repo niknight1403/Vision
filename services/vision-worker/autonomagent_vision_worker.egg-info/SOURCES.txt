@@ -1,0 +1,16 @@
+pyproject.toml
+autonomagent_vision_worker.egg-info/PKG-INFO
+autonomagent_vision_worker.egg-info/SOURCES.txt
+autonomagent_vision_worker.egg-info/dependency_links.txt
+autonomagent_vision_worker.egg-info/requires.txt
+autonomagent_vision_worker.egg-info/top_level.txt
+tests/test_hidden_treasure_swarm.py
+tests/test_llm_specialists.py
+tests/test_service.py
+tests/test_vision_identifier.py
+vision_worker/__init__.py
+vision_worker/hidden_treasure_swarm.py
+vision_worker/llm_specialists.py
+vision_worker/main.py
+vision_worker/service.py
+vision_worker/vision_identifier.py

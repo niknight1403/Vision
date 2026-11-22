@@ -52,3 +52,51 @@ def test_visual_inspection_rejects_unknown_fields(client: TestClient) -> None:
         headers={"authorization": "Bearer " + TOKEN},
     )
     assert response.status_code == 422
+
+
+ANALYZE_BODY = {
+    "candidate_id": "candidate-1",
+    "title": "Unverifizierter Titel",
+    "image_url": "https://images.invalid/item.jpg",
+    "asking_price_minor": 1000,
+}
+
+
+@pytest.mark.parametrize("header", [None, "Bearer wrong-token-wrong-token-wrong-token", TOKEN])
+def test_analyze_requires_the_exact_bearer_token(client: TestClient, header: str | None) -> None:
+    headers = {} if header is None else {"authorization": header}
+    response = client.post("/v1/analyze", json=ANALYZE_BODY, headers=headers)
+    assert response.status_code == 401
+    assert response.json()["detail"] == "WORKER_AUTH_REQUIRED"
+
+
+def test_analyze_rejects_unknown_fields(client: TestClient) -> None:
+    response = client.post(
+        "/v1/analyze",
+        json={**ANALYZE_BODY, "purchase_authorized": True},
+        headers={"authorization": "Bearer " + TOKEN},
+    )
+    assert response.status_code == 422
+
+
+def test_analyze_rejects_negative_asking_price(client: TestClient) -> None:
+    response = client.post(
+        "/v1/analyze",
+        json={**ANALYZE_BODY, "asking_price_minor": -1},
+        headers={"authorization": "Bearer " + TOKEN},
+    )
+    assert response.status_code == 422
+
+
+def test_visual_inspection_reports_non_https_sources_as_unverified(client: TestClient) -> None:
+    response = client.post(
+        "/v1/visual-inspection",
+        json={"image_url": "http://images.invalid/item.jpg", "hint_title": "Titel"},
+        headers={"authorization": "Bearer " + TOKEN},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["purchase_authorized"] is False
+    assert payload["authenticity_verified"] is False
+    assert payload["visual_inspection"]["identified"] is False
+    assert "HTTPS" in payload["visual_inspection"]["details"]
