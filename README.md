@@ -36,7 +36,7 @@ Required server-side environment:
 - API and task worker: `DATABASE_URL`, `AUTH_SIGNING_SECRET`, `VISION_WORKER_URL`, `VISION_WORKER_TOKEN`
 - Python worker: same `VISION_WORKER_TOKEN`, `VISION_ALLOWED_IMAGE_HOSTS` (exact comma-separated hostnames), `LLM_API_KEY`, `LLM_BASE_URL`, `VISION_MODEL`
 - Keep the Python worker on a private network. Never put server secrets in Expo `EXPO_PUBLIC_*` variables.
-- Configure outbound network policy to block private, loopback, link-local, and cloud metadata IP ranges; DNS checks alone cannot prevent DNS rebinding.
+- The worker resolves the allowlisted host once, rejects every non-public answer, and then connects to that exact validated address while still verifying the certificate and SNI for the hostname, so a second lookup cannot redirect the download (no DNS rebinding). Redirects are never followed. Keep an outbound network policy at the container/VPC layer as defence in depth: the code proves the pinning, it cannot prove the deployment's firewall.
 
 ## Workspace
 
