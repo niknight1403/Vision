@@ -20,3 +20,9 @@ Die Monitoring-Schicht aktiviert weder Testnet noch LIVE-Trading und startet kei
 Sensitive routes are limited in-process per client IP (`/v1/auth/login`, `/v1/auth/refresh`) and per authenticated user (`/v1/deals/scan`, `/v1/deals/:dealId/treasure-analysis`, `/v1/deals/:dealId/vision-inspection`). A refused request returns `429` with `error: RATE_LIMIT_EXCEEDED`, a `Retry-After` header in seconds and `x-ratelimit-remaining: 0` on every response.
 
 Alert on a sustained `429` rate per route: a spike on `/v1/auth/login` usually means credential stuffing, a spike on the analysis routes means a runaway client. The limiter is per process, so with several API instances the effective limit multiplies by the replica count; a shared limiter belongs in the gateway and remains an open item.
+
+## Outbox operations (Sprint 36)
+
+`outboxStatusCounts()` liefert die Verteilung über `PENDING`, `PROCESSING`, `PUBLISHED` und `DEAD_LETTER` und taugt direkt als Metrik-Gauge. Alarme: `DEAD_LETTER > 0` (sofort prüfen), `PROCESSING` älter als die Lease-Dauer (Reaper läuft nicht), wachsender `PENDING`-Rückstand (Handler zu langsam oder Provider-Ausfall).
+
+`reapExpiredLeases({ limit })` gibt abgelaufene Leases explizit in die Queue zurück, setzt `lockedBy`/`leaseUntil` zurück und markiert `lastError = "LEASE_EXPIRED"`. `replayDeadLetter(id, { maxReplays })` ist der einzige Weg zurück aus `DEAD_LETTER`: nur ein Event, das aktuell `DEAD_LETTER` ist und dessen `replayCount` unter dem Limit liegt, wird erneut eingereiht (Versuche zurückgesetzt). Ein Doppelklick oder ein zweiter Operator kann dieselbe Nachricht nicht zweimal wiederbeleben.

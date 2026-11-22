@@ -104,6 +104,7 @@ model OutboxEvent {
   lockedBy      String?
   lastError     String?
   publishedAt   DateTime?
+  replayCount   Int          @default(0)
   createdAt     DateTime     @default(now())
 
   @@index([status, availableAt])

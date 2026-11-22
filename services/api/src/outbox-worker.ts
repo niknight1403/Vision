@@ -5,6 +5,7 @@ export type OutboxMessage = {
   schemaVersion: number; payload: unknown; attempts: number;
 };
 export type OutboxHandler = (message: OutboxMessage) => Promise<void>;
+export type OutboxReplayResult = "REPLAYED" | "NOT_DEAD_LETTER" | "REPLAY_LIMIT_REACHED";
 export type WorkerOptions = { workerId: string; leaseSeconds?: number; maxAttempts?: number; baseRetrySeconds?: number };
 
 export function retryDelaySeconds(attempt: number, baseSeconds = 5): number {
@@ -15,6 +16,88 @@ export function retryDelaySeconds(attempt: number, baseSeconds = 5): number {
 export function redactOutboxError(error: unknown): string {
   const raw = error instanceof Error ? error.message : "Unknown handler error";
   return raw.replace(/(authorization|token|secret|password|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]").replace(/https?:\/\/[^\s]+/gi, "[URL_REDACTED]").slice(0, 500);
+}
+
+/**
+ * Return leases that outlived their owner to the queue.
+ *
+ * The claim query already reclaims an expired lease, but nothing reported it: a
+ * worker that crashed mid-handler silently delayed every message behind it and
+ * no operator could see that it happened. This makes the recovery explicit,
+ * bounded and observable.
+ */
+export async function reapExpiredLeases(
+  prisma: PrismaClient,
+  options: { limit?: number } = {},
+): Promise<number> {
+  const limit = options.limit ?? 100;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error("INVALID_REAP_LIMIT");
+  const expired = await prisma.outboxEvent.findMany({
+    where: { status: "PROCESSING", leaseUntil: { lt: new Date() } },
+    orderBy: { leaseUntil: "asc" },
+    take: limit,
+    select: { id: true },
+  });
+  if (expired.length === 0) return 0;
+  const result = await prisma.outboxEvent.updateMany({
+    where: { id: { in: expired.map((row) => row.id) }, status: "PROCESSING", leaseUntil: { lt: new Date() } },
+    data: {
+      status: "PENDING",
+      availableAt: new Date(),
+      leaseUntil: null,
+      lockedBy: null,
+      lastError: "LEASE_EXPIRED",
+    },
+  });
+  return result.count;
+}
+
+/** Counts per outbox status; safe for a metrics gauge. */
+export async function outboxStatusCounts(prisma: PrismaClient): Promise<Record<string, number>> {
+  const grouped = await prisma.outboxEvent.groupBy({ by: ["status"], _count: { _all: true } });
+  const counts: Record<string, number> = { PENDING: 0, PROCESSING: 0, PUBLISHED: 0, DEAD_LETTER: 0 };
+  for (const row of grouped) counts[row.status] = row._count._all;
+  return counts;
+}
+
+/**
+ * Re-queue one dead-lettered event, at most `maxReplays` times.
+ *
+ * A replay is an explicit operator decision, so it only accepts an event that is
+ * currently DEAD_LETTER and has never been replayed: a repeated click, a retried
+ * request or a second operator cannot resurrect the same message twice.
+ */
+export async function replayDeadLetter(
+  prisma: PrismaClient,
+  eventId: string,
+  options: { maxReplays?: number } = {},
+): Promise<OutboxReplayResult> {
+  const maxReplays = options.maxReplays ?? 1;
+  if (!Number.isInteger(maxReplays) || maxReplays < 1 || maxReplays > 5) {
+    throw new Error("INVALID_MAX_REPLAYS");
+  }
+  if (!eventId.trim()) throw new Error("EVENT_ID_REQUIRED");
+  const existing = await prisma.outboxEvent.findUnique({
+    where: { id: eventId },
+    select: { status: true, replayCount: true },
+  });
+  if (!existing) throw new Error("OUTBOX_EVENT_NOT_FOUND");
+  if (existing.status !== "DEAD_LETTER") return "NOT_DEAD_LETTER";
+  if (existing.replayCount >= maxReplays) return "REPLAY_LIMIT_REACHED";
+  const changed = await prisma.outboxEvent.updateMany({
+    where: { id: eventId, status: "DEAD_LETTER", replayCount: existing.replayCount },
+    data: {
+      status: "PENDING",
+      attempts: 0,
+      availableAt: new Date(),
+      leaseUntil: null,
+      lockedBy: null,
+      lastError: null,
+      replayCount: { increment: 1 },
+    },
+  });
+  if (changed.count !== 1) return "REPLAY_LIMIT_REACHED";
+  return "REPLAYED";
 }
 
 export async function claimOutboxMessage(prisma: PrismaClient, options: WorkerOptions): Promise<OutboxMessage | null> {
