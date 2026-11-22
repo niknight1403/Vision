@@ -36,8 +36,11 @@ Model-generated source links and comparable sales are discarded by the specialis
 Required server-side environment:
 - API and task worker: `DATABASE_URL`, `AUTH_SIGNING_SECRET`, `VISION_WORKER_URL`, `VISION_WORKER_TOKEN`
 - Python worker: same `VISION_WORKER_TOKEN`, `VISION_ALLOWED_IMAGE_HOSTS` (exact comma-separated hostnames), `LLM_API_KEY`, `LLM_BASE_URL`, `VISION_MODEL`
+- Python worker limits (optional): `VISION_MAX_CONCURRENT_ANALYSES` (default 4, 503 `WORKER_BUSY` when exhausted), `VISION_ANALYSIS_TIMEOUT_SECONDS` (default 90, 504 `WORKER_TIMEOUT`), `VISION_SHUTDOWN_GRACE_SECONDS` (default 20, drains in-flight analyses on shutdown). Request bodies are capped at 64 KiB and every response carries an `x-request-id`; `/health` is liveness, `/ready` is readiness.
+- Metrics (optional): set `METRICS_TOKEN` (at least 16 characters) to open `GET /metrics` for Prometheus; without it the route answers 503. Requests are counted per route template, plus outbox and agent-task gauges.
+- Rate limits (optional): `AUTH_RATE_LIMIT_MAX`/`AUTH_RATE_LIMIT_WINDOW_MS` (default 10 per 60 s per client IP), `SCAN_RATE_LIMIT_MAX`/`SCAN_RATE_LIMIT_WINDOW_MS` (default 30 per 60 s per user), `ANALYSIS_RATE_LIMIT_MAX`/`ANALYSIS_RATE_LIMIT_WINDOW_MS` (default 20 per 60 s per user) and `RATE_LIMIT_MAX_KEYS` (default 10 000 tracked keys). A refused request answers 429 with `Retry-After` and `x-ratelimit-remaining`; an out-of-range value aborts startup instead of silently disabling the limit.
 - Keep the Python worker on a private network. Never put server secrets in Expo `EXPO_PUBLIC_*` variables.
-- Configure outbound network policy to block private, loopback, link-local, and cloud metadata IP ranges; DNS checks alone cannot prevent DNS rebinding.
+- The worker resolves the allowlisted host once, rejects every non-public answer, and then connects to that exact validated address while still verifying the certificate and SNI for the hostname, so a second lookup cannot redirect the download (no DNS rebinding). Redirects are never followed. Keep an outbound network policy at the container/VPC layer as defence in depth: the code proves the pinning, it cannot prove the deployment's firewall.
 
 ## Workspace
 
@@ -92,6 +95,7 @@ npm run typecheck && npm test
 8. Publish build IDs, artifact hashes, migration status, and health-check evidence before calling a release production-ready.
 
 See [docs/architecture.md](docs/architecture.md) and [docs/release-gates.md](docs/release-gates.md).
+The evidence for Sprints 21–30 is recorded in [docs/thirty-sprint-release-gate.md](docs/thirty-sprint-release-gate.md); it is a source/test gate, not a production approval.
 
 ## License
 

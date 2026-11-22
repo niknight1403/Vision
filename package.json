@@ -15,6 +15,7 @@
     "pretest": "npm run prepare:checks",
     "test": "npm run test --workspaces --if-present",
     "pretypecheck": "npm run prepare:checks",
+    "test:python": "PYTHONPATH=services/vision-worker python3 -m pytest -q services/vision-worker/tests",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "audit:gate": "node scripts/audit-gate.mjs"
   },

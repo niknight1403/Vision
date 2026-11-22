@@ -64,7 +64,17 @@ async function login(email: string) {
 suite("authenticated deal review routes (RBAC)", () => {
   beforeAll(async () => {
     await prisma.$connect();
-    app = await buildServer({ prisma, authSigningSecret: SIGNING_SECRET });
+    // The RBAC suite logs in many times from one test IP, so it configures its own
+    // generous limits; the rate-limit behaviour itself is covered separately.
+    app = await buildServer({
+      prisma,
+      authSigningSecret: SIGNING_SECRET,
+      rateLimits: {
+        auth: { maxHits: 1_000, windowMs: 60_000, maxKeys: 1_000 },
+        scan: { maxHits: 1_000, windowMs: 60_000, maxKeys: 1_000 },
+        analysis: { maxHits: 1_000, windowMs: 60_000, maxKeys: 1_000 },
+      },
+    });
     await app.ready();
   });
 

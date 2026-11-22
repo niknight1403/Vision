@@ -55,17 +55,9 @@ async def test_injected_clients_remain_owned_by_the_caller():
         async def close(self):
             self.closed = True
 
-    class FakeHttpClient:
-        closed = False
-
-        async def aclose(self):
-            self.closed = True
-
     llm = FakeOpenAIClient()
-    http = FakeHttpClient()
-    inspector = VisionTreasureInspector(client=llm, http_client=http)
+    inspector = VisionTreasureInspector(client=llm, allowed_hosts={"images.example.org"})
 
     await inspector.close()
 
     assert llm.closed is False
-    assert http.closed is False
