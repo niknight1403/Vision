@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import helmet from "@fastify/helmet";
 import cors from "@fastify/cors";
@@ -10,6 +10,8 @@ import { listDealCandidates, reviewDealCandidate } from "./deal-candidate-servic
 import { runAndPersistDealScan } from "./deal-scan-service.js";
 import { createAgentTask, hashTaskInput } from "./agent-task-service.js";
 import type { ProviderRegistry } from "./providers/registry.js";
+import { createMetrics } from "./observability.js";
+import { outboxStatusCounts } from "./outbox-worker.js";
 import {
   rateLimitConfigFromEnv,
   retryAfterSeconds,
@@ -29,6 +31,8 @@ export interface ServerDependencies {
   providers?: ProviderRegistry;
   /** Overrides for the in-process limiters; defaults come from the environment. */
   rateLimits?: { auth: RateLimitConfig; scan: RateLimitConfig; analysis: RateLimitConfig };
+  /** Bearer token that unlocks GET /metrics; unset keeps the route closed. */
+  metricsToken?: string;
 }
 
 type ReviewDecision = "APPROVED" | "REJECTED" | "ARCHIVED";
@@ -96,6 +100,13 @@ function serializeDeal(deal: DealCandidate) {
   };
 }
 
+function timingSafeEqualString(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
 function errorCode(error: unknown): string {
   return error instanceof Error ? error.message : "INTERNAL_ERROR";
 }
@@ -112,6 +123,29 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     if (!dependencies.authSigningSecret) throw new Error("AUTH_SIGNING_SECRET_NOT_CONFIGURED");
     return dependencies.authSigningSecret;
   }
+
+  const metrics = createMetrics();
+  let inFlight = 0;
+  app.addHook("onRequest", async (request) => {
+    inFlight += 1;
+    metrics.setGauge("http_requests_in_flight", {}, inFlight);
+    (request as FastifyRequest & { metricsStartedAt?: number }).metricsStartedAt = Date.now();
+  });
+  app.addHook("onSend", async (request, reply, payload) => {
+    // Echo the correlation id the client sent (or the one Fastify generated).
+    reply.header("x-request-id", request.id);
+    return payload;
+  });
+  app.addHook("onResponse", async (request, reply) => {
+    inFlight = Math.max(0, inFlight - 1);
+    metrics.setGauge("http_requests_in_flight", {}, inFlight);
+    const route = request.routeOptions?.url ?? "unmatched";
+    metrics.increment("http_requests_total", { route, method: request.method, status: String(reply.statusCode) });
+    const started = (request as FastifyRequest & { metricsStartedAt?: number }).metricsStartedAt;
+    if (typeof started === "number") {
+      metrics.increment("http_request_duration_ms_total", { route }, Date.now() - started);
+    }
+  });
 
   const rateLimits = dependencies.rateLimits ?? {
     auth: rateLimitConfigFromEnv(process.env, { max: "AUTH_RATE_LIMIT_MAX", window: "AUTH_RATE_LIMIT_WINDOW_MS" },
@@ -190,6 +224,35 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     providers: dependencies.providers?.list() ?? [],
     note: "Autonomous sourcing and analysis only; mutating marketplace actions require a reviewed adapter.",
   });
+  });
+
+  app.get("/metrics", async (request, reply) => {
+    const expected = dependencies.metricsToken;
+    if (!expected || expected.length < 16) {
+      return reply.code(503).send({ error: "METRICS_NOT_CONFIGURED" });
+    }
+    const authorization = request.headers.authorization;
+    if (!authorization || !timingSafeEqualString(authorization, "Bearer " + expected)) {
+      return reply.code(401).send({ error: "METRICS_AUTH_REQUIRED" });
+    }
+    try {
+      const counts = await outboxStatusCounts(prisma);
+      for (const [status, value] of Object.entries(counts)) {
+        metrics.setGauge("outbox_events", { status }, value);
+      }
+      const tasks = await prisma.agentTask.groupBy({ by: ["status"], _count: { _all: true } });
+      const taskCounts: Record<string, number> = {
+        QUEUED: 0, RUNNING: 0, CHECKPOINTED: 0, SUCCEEDED: 0, FAILED: 0, CANCELLED: 0,
+      };
+      for (const row of tasks) taskCounts[row.status] = row._count._all;
+      for (const [status, value] of Object.entries(taskCounts)) {
+        metrics.setGauge("agent_tasks", { status }, value);
+      }
+    } catch (error) {
+      // A database hiccup must not hide the process metrics that already exist.
+      reply.log.error({ err: error }, "metrics gauge collection failed");
+    }
+    return reply.type("text/plain; version=0.0.4").send(metrics.render());
   });
 
   app.post("/v1/auth/login", async (request, reply) => {
