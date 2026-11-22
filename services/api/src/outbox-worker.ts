@@ -6,7 +6,7 @@ export type OutboxMessage = {
 };
 export type OutboxHandler = (message: OutboxMessage) => Promise<void>;
 export type OutboxReplayResult = "REPLAYED" | "NOT_DEAD_LETTER" | "REPLAY_LIMIT_REACHED";
-export type WorkerOptions = { workerId: string; leaseSeconds?: number; maxAttempts?: number; baseRetrySeconds?: number };
+export type WorkerOptions = { workerId: string; leaseSeconds?: number; maxAttempts?: number; baseRetrySeconds?: number; aggregateId?: string };
 
 export function retryDelaySeconds(attempt: number, baseSeconds = 5): number {
   const n = Math.max(1, Math.min(12, Math.floor(attempt)));
@@ -105,8 +105,8 @@ export async function claimOutboxMessage(prisma: PrismaClient, options: WorkerOp
   if (!options.workerId.trim()) throw new Error("WORKER_ID_REQUIRED");
   if (!Number.isInteger(leaseSeconds) || leaseSeconds < 5 || leaseSeconds > 3600) throw new Error("INVALID_LEASE_SECONDS");
   const rows = await prisma.$queryRawUnsafe<OutboxMessage[]>(
-    'WITH candidate AS (SELECT id FROM "OutboxEvent" WHERE ((status = \'PENDING\' AND "availableAt" <= NOW()) OR (status = \'PROCESSING\' AND "leaseUntil" < NOW())) ORDER BY "availableAt", "createdAt" FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE "OutboxEvent" event SET status = \'PROCESSING\', attempts = event.attempts + 1, "lockedBy" = $1, "leaseUntil" = NOW() + ($2 * INTERVAL \'1 second\') FROM candidate WHERE event.id = candidate.id RETURNING event.id, event."eventType", event."aggregateId", event."correlationId", event."schemaVersion", event.payload, event.attempts',
-    options.workerId, leaseSeconds,
+    'WITH candidate AS (SELECT id FROM "OutboxEvent" WHERE ((status = \'PENDING\' AND "availableAt" <= NOW()) OR (status = \'PROCESSING\' AND "leaseUntil" < NOW())) AND ($3::text IS NULL OR "aggregateId" = $3) ORDER BY "availableAt", "createdAt" FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE "OutboxEvent" event SET status = \'PROCESSING\', attempts = event.attempts + 1, "lockedBy" = $1, "leaseUntil" = NOW() + ($2 * INTERVAL \'1 second\') FROM candidate WHERE event.id = candidate.id RETURNING event.id, event."eventType", event."aggregateId", event."correlationId", event."schemaVersion", event.payload, event.attempts',
+    options.workerId, leaseSeconds, options.aggregateId ?? null,
   );
   return rows[0] ?? null;
 }
