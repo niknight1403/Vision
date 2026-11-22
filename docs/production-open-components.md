@@ -1,7 +1,7 @@
 # Offene Komponenten für den produktiven Live-Betrieb
 
 Stand: 2026-11-21  
-Repository-Commit: `bd05c77`  
+Repository-Commit: `a50f0ca` plus Sprint-21–30-Evidence-Commits (siehe [thirty-sprint-release-gate.md](thirty-sprint-release-gate.md))  
 Aktueller Betriebsmodus: `AUTONOMOUS` mit Read-only-Providerdaten  
 Live-Handel: deaktiviert
 
@@ -190,3 +190,7 @@ Vor einer Live-Freigabe müssen zusätzlich nachgewiesen werden:
 | Release-Evidence | teilweise vorhanden | Ja |
 
 **Konsequenz:** Bis mindestens die Prior-0- und Prior-1-Komponenten implementiert, integriert getestet und operativ nachgewiesen sind, muss Live-Handel deaktiviert bleiben. Der aktuelle Commit ist ein Readiness-/Staging-Stand, keine Produktionsfreigabe.
+
+## Sprint-21–30-Nachweis
+
+Die Sprints 21–30 haben die vorhandenen read-only/fail-closed Sicherheitsprimitive und ihre Evidence dokumentiert. Fehlende PostgreSQL-, pytest-, Android- und externe Provider-Infrastruktur wurde nicht simuliert; die offenen Nachweise bleiben harte Gates. Siehe [docs/thirty-sprint-release-gate.md](thirty-sprint-release-gate.md).

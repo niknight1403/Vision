@@ -91,6 +91,7 @@ npm run typecheck && npm test
 8. Publish build IDs, artifact hashes, migration status, and health-check evidence before calling a release production-ready.
 
 See [docs/architecture.md](docs/architecture.md) and [docs/release-gates.md](docs/release-gates.md).
+The evidence for Sprints 21–30 is recorded in [docs/thirty-sprint-release-gate.md](docs/thirty-sprint-release-gate.md); it is a source/test gate, not a production approval.
 
 ## License
 
