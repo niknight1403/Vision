@@ -10,6 +10,12 @@ import { listDealCandidates, reviewDealCandidate } from "./deal-candidate-servic
 import { runAndPersistDealScan } from "./deal-scan-service.js";
 import { createAgentTask, hashTaskInput } from "./agent-task-service.js";
 import type { ProviderRegistry } from "./providers/registry.js";
+import {
+  rateLimitConfigFromEnv,
+  retryAfterSeconds,
+  SlidingWindowRateLimiter,
+  type RateLimitConfig,
+} from "./api-hardening.js";
 
 export interface ServerDependencies {
   prisma: PrismaClient;
@@ -21,6 +27,8 @@ export interface ServerDependencies {
     inspectItemVisuals(imageUrl: string, hintTitle: string): Promise<Record<string, unknown>>;
   };
   providers?: ProviderRegistry;
+  /** Overrides for the in-process limiters; defaults come from the environment. */
+  rateLimits?: { auth: RateLimitConfig; scan: RateLimitConfig; analysis: RateLimitConfig };
 }
 
 type ReviewDecision = "APPROVED" | "REJECTED" | "ARCHIVED";
@@ -60,6 +68,7 @@ const STATUS_BY_ERROR: Readonly<Record<string, number>> = Object.freeze({
   TREASURE_ANALYSIS_IDEMPOTENCY_CONFLICT: 409,
   TREASURE_ANALYSIS_INPUT_INVALID: 400,
   AGENT_TASK_NOT_FOUND: 404,
+  RATE_LIMIT_EXCEEDED: 429,
 });
 
 /** BigInt cents and Date values are normalised so the payload stays JSON-safe. */
@@ -102,6 +111,38 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
   function signingSecret(): string {
     if (!dependencies.authSigningSecret) throw new Error("AUTH_SIGNING_SECRET_NOT_CONFIGURED");
     return dependencies.authSigningSecret;
+  }
+
+  const rateLimits = dependencies.rateLimits ?? {
+    auth: rateLimitConfigFromEnv(process.env, { max: "AUTH_RATE_LIMIT_MAX", window: "AUTH_RATE_LIMIT_WINDOW_MS" },
+      { maxHits: 10, windowMs: 60_000 }),
+    scan: rateLimitConfigFromEnv(process.env, { max: "SCAN_RATE_LIMIT_MAX", window: "SCAN_RATE_LIMIT_WINDOW_MS" },
+      { maxHits: 30, windowMs: 60_000 }),
+    analysis: rateLimitConfigFromEnv(process.env, { max: "ANALYSIS_RATE_LIMIT_MAX", window: "ANALYSIS_RATE_LIMIT_WINDOW_MS" },
+      { maxHits: 20, windowMs: 60_000 }),
+  };
+  const limiters = {
+    auth: new SlidingWindowRateLimiter(rateLimits.auth.maxHits, rateLimits.auth.windowMs, rateLimits.auth.maxKeys),
+    scan: new SlidingWindowRateLimiter(rateLimits.scan.maxHits, rateLimits.scan.windowMs, rateLimits.scan.maxKeys),
+    analysis: new SlidingWindowRateLimiter(rateLimits.analysis.maxHits, rateLimits.analysis.windowMs, rateLimits.analysis.maxKeys),
+  };
+
+  /**
+   * Enforce one limiter for one principal. Returns false when the reply was
+   * already sent, so the caller must return immediately.
+   */
+  function withinRateLimit(
+    limiter: SlidingWindowRateLimiter,
+    key: string,
+    reply: FastifyReply,
+  ): boolean {
+    const decision = limiter.check(key);
+    reply.header("x-ratelimit-remaining", String(decision.remaining));
+    if (decision.allowed) return true;
+    const wait = retryAfterSeconds(decision);
+    reply.header("retry-after", String(wait));
+    reply.code(429).send({ error: "RATE_LIMIT_EXCEEDED", retryAfterSeconds: wait });
+    return false;
   }
 
   function fail(reply: FastifyReply, error: unknown) {
@@ -152,6 +193,7 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
   });
 
   app.post("/v1/auth/login", async (request, reply) => {
+    if (!withinRateLimit(limiters.auth, "ip:" + request.ip, reply)) return reply;
     const body = request.body as { email?: unknown; password?: unknown } | undefined;
     if (typeof body?.email !== "string" || !body.email.trim() || typeof body.password !== "string") {
       return reply.code(400).send({ error: "LOGIN_FIELDS_REQUIRED" });
@@ -170,6 +212,7 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
   });
 
   app.post("/v1/auth/refresh", async (request, reply) => {
+    if (!withinRateLimit(limiters.auth, "ip:" + request.ip, reply)) return reply;
     const body = request.body as { refreshToken?: unknown } | undefined;
     if (typeof body?.refreshToken !== "string" || !body.refreshToken) {
       return reply.code(400).send({ error: "REFRESH_TOKEN_REQUIRED" });
@@ -233,6 +276,7 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     try {
       const principal = await principalFrom(request);
       requireAdmin(principal);
+      if (!withinRateLimit(limiters.scan, "user:" + principal.userId, reply)) return reply;
       if (!dependencies.providers) throw new Error("PROVIDER_NOT_CONFIGURED");
       const body = request.body as Record<string, unknown> | undefined;
       const query = body?.query;
@@ -288,6 +332,7 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     try {
       const principal = await principalFrom(request);
       requireAdmin(principal);
+      if (!withinRateLimit(limiters.analysis, "user:" + principal.userId, reply)) return reply;
       const { dealId } = request.params as { dealId: string };
       const body = request.body as { imageUrl?: unknown } | undefined;
       const imageUrl = body?.imageUrl;
@@ -338,6 +383,7 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
     try {
       const principal = await principalFrom(request);
       requireAdmin(principal);
+      if (!withinRateLimit(limiters.analysis, "user:" + principal.userId, reply)) return reply;
       if (!dependencies.visionInspector) throw new Error("VISION_INSPECTOR_NOT_CONFIGURED");
       const { dealId } = request.params as { dealId: string };
       const body = request.body as { imageUrl?: unknown } | undefined;
