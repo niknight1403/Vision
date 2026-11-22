@@ -8,7 +8,7 @@ import { authenticateBearerToken, requireAdmin, requireOperator, type Authentica
 import { loginWithPassword, revokeRefreshToken, rotateRefreshToken } from "./auth-session-service.js";
 import { listDealCandidates, reviewDealCandidate } from "./deal-candidate-service.js";
 import { runAndPersistDealScan } from "./deal-scan-service.js";
-import { createAgentTask } from "./agent-task-service.js";
+import { createAgentTask, hashTaskInput } from "./agent-task-service.js";
 import type { ProviderRegistry } from "./providers/registry.js";
 
 export interface ServerDependencies {
@@ -303,7 +303,7 @@ export async function buildServer(dependencies: ServerDependencies): Promise<Fas
       const input = { dealId: deal.id, imageUrl, title: deal.title, productUrl: deal.productUrl,
         purchasePriceMinor: deal.purchasePriceMinor.toString(), totalCostCents: deal.totalCostCents.toString(),
         currency: deal.currency };
-      const inputHash = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+      const inputHash = hashTaskInput(input);
       const idempotencyKey = createHash("sha256").update(principal.userId + ":" + suppliedKey).digest("hex");
       const existing = await prisma.agentTask.findUnique({ where: { idempotencyKey } });
       if (existing) {

@@ -26,3 +26,21 @@ describe("agent task lifecycle contract", () => {
     expect(() => hashTaskInput([])).toThrow("TASK_INPUT_MUST_BE_OBJECT");
   });
 });
+
+describe("canonical task input hashing", () => {
+  it("is independent of key order so route and service agree on the idempotency hash", () => {
+    const first = hashTaskInput({ dealId: "d1", imageUrl: "https://x.test/a.jpg", currency: "EUR" });
+    const reordered = hashTaskInput({ currency: "EUR", imageUrl: "https://x.test/a.jpg", dealId: "d1" });
+    expect(first).toBe(reordered);
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("changes when any bound input value changes", () => {
+    const base = { dealId: "d1", imageUrl: "https://x.test/a.jpg" };
+    expect(hashTaskInput(base)).not.toBe(hashTaskInput({ ...base, imageUrl: "https://x.test/b.jpg" }));
+  });
+
+  it("rejects non-object input", () => {
+    expect(() => hashTaskInput(["a"])).toThrow("TASK_INPUT_MUST_BE_OBJECT");
+  });
+});
