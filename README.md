@@ -35,6 +35,7 @@ Market research remains unavailable until a real sold-listing provider is config
 Required server-side environment:
 - API and task worker: `DATABASE_URL`, `AUTH_SIGNING_SECRET`, `VISION_WORKER_URL`, `VISION_WORKER_TOKEN`
 - Python worker: same `VISION_WORKER_TOKEN`, `VISION_ALLOWED_IMAGE_HOSTS` (exact comma-separated hostnames), `LLM_API_KEY`, `LLM_BASE_URL`, `VISION_MODEL`
+- Python worker limits (optional): `VISION_MAX_CONCURRENT_ANALYSES` (default 4, 503 `WORKER_BUSY` when exhausted), `VISION_ANALYSIS_TIMEOUT_SECONDS` (default 90, 504 `WORKER_TIMEOUT`), `VISION_SHUTDOWN_GRACE_SECONDS` (default 20, drains in-flight analyses on shutdown). Request bodies are capped at 64 KiB and every response carries an `x-request-id`; `/health` is liveness, `/ready` is readiness.
 - Keep the Python worker on a private network. Never put server secrets in Expo `EXPO_PUBLIC_*` variables.
 - The worker resolves the allowlisted host once, rejects every non-public answer, and then connects to that exact validated address while still verifying the certificate and SNI for the hostname, so a second lookup cannot redirect the download (no DNS rebinding). Redirects are never followed. Keep an outbound network policy at the container/VPC layer as defence in depth: the code proves the pinning, it cannot prove the deployment's firewall.
 

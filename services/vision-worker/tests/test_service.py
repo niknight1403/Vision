@@ -29,7 +29,9 @@ def test_visual_inspection_requires_the_exact_bearer_token(client: TestClient, h
     headers = {} if header is None else {"authorization": header}
     response = client.post("/v1/visual-inspection", json=BODY, headers=headers)
     assert response.status_code == 401
-    assert response.json()["detail"] == "WORKER_AUTH_REQUIRED"
+    body = response.json()
+    assert body["error"] == "WORKER_AUTH_REQUIRED"
+    assert body["requestId"]
 
 
 def test_visual_inspection_returns_evidence_without_authorizing_anything(client: TestClient) -> None:
@@ -67,7 +69,9 @@ def test_analyze_requires_the_exact_bearer_token(client: TestClient, header: str
     headers = {} if header is None else {"authorization": header}
     response = client.post("/v1/analyze", json=ANALYZE_BODY, headers=headers)
     assert response.status_code == 401
-    assert response.json()["detail"] == "WORKER_AUTH_REQUIRED"
+    body = response.json()
+    assert body["error"] == "WORKER_AUTH_REQUIRED"
+    assert body["requestId"]
 
 
 def test_analyze_rejects_unknown_fields(client: TestClient) -> None:
