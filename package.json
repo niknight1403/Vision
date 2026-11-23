@@ -11,7 +11,10 @@
   "scripts": {
     "mobile": "npm run start --workspace @autonomagent/mobile",
     "android": "npm run android --workspace @autonomagent/mobile",
+    "prepare:checks": "npm exec --workspace @autonomagent/api -- prisma generate --schema prisma/schema.prisma",
+    "pretest": "npm run prepare:checks",
     "test": "npm run test --workspaces --if-present",
+    "pretypecheck": "npm run prepare:checks",
     "test:python": "PYTHONPATH=services/vision-worker python3 -m pytest -q services/vision-worker/tests",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "audit:gate": "node scripts/audit-gate.mjs"
@@ -20,6 +23,11 @@
     "node": ">=22.13.0"
   },
   "overrides": {
+    "deepmerge-ts": "^8.0.0",
+    "image-size": "^2.0.3",
+    "postcss": "^8.5.23",
+    "react-native": "0.88.1",
+    "react": "19.3.0",
     "effect": "3.22.1",
     "minimatch": "^11.0.1"
   }

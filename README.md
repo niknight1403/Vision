@@ -24,6 +24,7 @@ The Vision workflow is an asynchronous, server-side analysis pipeline:
 6. Results and evidence gaps are persisted on the task and shown in the Android client.
 
 Market research remains unavailable until a real sold-listing provider is configured. No model-generated price estimate is presented as verified market evidence. Purchase authorization and authenticity verification are always false.
+Model-generated source links and comparable sales are discarded by the specialist adapter because the product brief contains no verified source URLs; the result records that evidence gap.
 
 ### Run the Vision stack
 

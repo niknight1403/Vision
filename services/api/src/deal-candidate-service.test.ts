@@ -3,7 +3,6 @@ import type { PrismaClient } from "@prisma/client";
 import {
   listDealCandidates,
   persistDealCandidates,
-  reviewDealCandidate,
   type PersistableDealAnalysis,
 } from "./deal-candidate-service.js";
 
@@ -60,23 +59,14 @@ describe("deal candidate persistence", () => {
     await expect(listDealCandidates(fakePrisma(), { limit: 101 })).rejects.toThrow(/LIMIT/);
   });
 
-  it("does not allow simulated or risk-failing deals to be approved", async () => {
-    const simulatedPrisma = fakePrisma({
-      dealCandidate: {
-        findUnique: vi.fn(async () => ({ id: "deal-1", simulated: true, riskPassed: true })),
-      },
-    });
-    await expect(reviewDealCandidate(simulatedPrisma, {
-      dealId: "deal-1", reviewerId: "admin-1", decision: "APPROVED",
-    })).rejects.toThrow(/NOT_ELIGIBLE/);
-
-    const riskFailingPrisma = fakePrisma({
-      dealCandidate: {
-        findUnique: vi.fn(async () => ({ id: "deal-1", simulated: false, riskPassed: false })),
-      },
-    });
-    await expect(reviewDealCandidate(riskFailingPrisma, {
-      dealId: "deal-1", reviewerId: "admin-1", decision: "APPROVED",
-    })).rejects.toThrow(/NOT_ELIGIBLE/);
+  it("never overwrites tenant review state while refreshing shared catalogue data", async () => {
+    const prisma = fakePrisma();
+    await persistDealCandidates(prisma, [deal]);
+    const upsert = prisma.dealCandidate.upsert as unknown as ReturnType<typeof vi.fn>;
+    const args = upsert.mock.calls[0]![0] as { create: Record<string, unknown>; update: Record<string, unknown> };
+    expect(args.create).not.toHaveProperty("reviewedBy");
+    expect(args.update).not.toHaveProperty("reviewStatus");
+    expect(args.update).not.toHaveProperty("reviewedBy");
+    expect(args.update).not.toHaveProperty("reviewedAt");
   });
 });

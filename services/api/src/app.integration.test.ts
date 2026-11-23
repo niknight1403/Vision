@@ -13,6 +13,8 @@ const prisma = new PrismaClient();
 const createdUserIds: string[] = [];
 const createdDealIds: string[] = [];
 const createdTaskIds: string[] = [];
+const createdTenantIds: string[] = [];
+const tenantByEmail = new Map<string, string>();
 let app: FastifyInstance;
 let adminEmail: string;
 let viewerEmail: string;
@@ -25,6 +27,10 @@ async function createUser(role: "ADMIN" | "VIEWER") {
     data: { email, passwordHash: await hashPassword(PASSWORD), role },
   });
   createdUserIds.push(user.id);
+  const tenant = await prisma.tenant.create({ data: { name: "Test workspace" } });
+  createdTenantIds.push(tenant.id);
+  await prisma.tenantMembership.create({ data: { tenantId: tenant.id, userId: user.id, role: role === "ADMIN" ? "OWNER" : "VIEWER" } });
+  tenantByEmail.set(email, tenant.id);
   return email;
 }
 
@@ -50,6 +56,8 @@ async function createDeal(overrides: { simulated?: boolean; riskPassed?: boolean
   createdDealIds.push(deal.id);
   return deal;
 }
+
+function tenantHeader(email: string) { return { "x-tenant-id": tenantByEmail.get(email)! }; }
 
 async function login(email: string) {
   const response = await app.inject({
@@ -87,9 +95,13 @@ suite("authenticated deal review routes (RBAC)", () => {
     await prisma.refreshSession.deleteMany({ where: { userId: { in: createdUserIds } } });
     await prisma.outboxEvent.deleteMany({ where: { aggregateId: { in: createdTaskIds } } });
     await prisma.agentTask.deleteMany({ where: { id: { in: createdTaskIds } } });
+    await prisma.dealReview.deleteMany({ where: { candidateId: { in: createdDealIds } } });
     await prisma.dealCandidate.deleteMany({ where: { id: { in: createdDealIds } } });
     await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
+    await prisma.tenant.deleteMany({ where: { id: { in: createdTenantIds } } });
     createdUserIds.length = 0;
+    createdTenantIds.length = 0;
+    tenantByEmail.clear();
     createdDealIds.length = 0;
     createdTaskIds.length = 0;
   });
@@ -120,7 +132,7 @@ suite("authenticated deal review routes (RBAC)", () => {
     const deal = await createDeal();
     const tokens = await login(adminEmail);
     const key = "treasure-test-" + process.pid + "-" + sequence;
-    const headers = { authorization: "Bearer " + tokens.accessToken, "x-idempotency-key": key };
+    const headers = { authorization: "Bearer " + tokens.accessToken, ...tenantHeader(adminEmail), "x-idempotency-key": key };
     const url = "/v1/deals/" + deal.id + "/treasure-analysis";
     const payload = { imageUrl: "https://images.example.test/item.jpg" };
     const first = await app.inject({ method: "POST", url, headers, payload });
@@ -134,7 +146,7 @@ suite("authenticated deal review routes (RBAC)", () => {
     expect(repeated.statusCode).toBe(202);
     expect(repeated.json().taskId).toBe(queued.taskId);
     const status = await app.inject({ method: "GET", url: "/v1/treasure-analyses/" + queued.taskId,
-      headers: { authorization: "Bearer " + tokens.accessToken } });
+      headers: { authorization: "Bearer " + tokens.accessToken, ...tenantHeader(adminEmail) } });
     expect(status.statusCode).toBe(200);
     expect(status.json().status).toBe("QUEUED");
     expect(status.json().result).toBeNull();
@@ -143,7 +155,7 @@ suite("authenticated deal review routes (RBAC)", () => {
   it("rejects reuse of a treasure-analysis idempotency key with different input", async () => {
     const deal = await createDeal();
     const tokens = await login(adminEmail);
-    const headers = { authorization: "Bearer " + tokens.accessToken,
+    const headers = { authorization: "Bearer " + tokens.accessToken, ...tenantHeader(adminEmail),
       "x-idempotency-key": "treasure-conflict-" + process.pid + "-" + sequence };
     const url = "/v1/deals/" + deal.id + "/treasure-analysis";
     const first = await app.inject({ method: "POST", url, headers,
@@ -168,7 +180,7 @@ suite("authenticated deal review routes (RBAC)", () => {
     const forbidden = await app.inject({
       method: "POST",
       url: `/v1/deals/${deal.id}/vision-inspection`,
-      headers: { authorization: `Bearer ${viewer.accessToken}` },
+      headers: { authorization: `Bearer ${viewer.accessToken}`, ...tenantHeader(viewerEmail) },
       payload: { imageUrl: "https://images.example.test/item.jpg" },
     });
     expect(forbidden.statusCode).toBe(403);
@@ -177,7 +189,7 @@ suite("authenticated deal review routes (RBAC)", () => {
     const unavailable = await app.inject({
       method: "POST",
       url: `/v1/deals/${deal.id}/vision-inspection`,
-      headers: { authorization: `Bearer ${admin.accessToken}` },
+      headers: { authorization: `Bearer ${admin.accessToken}`, ...tenantHeader(adminEmail) },
       payload: { imageUrl: "https://images.example.test/item.jpg" },
     });
     expect(unavailable.statusCode).toBe(503);
@@ -190,7 +202,7 @@ suite("authenticated deal review routes (RBAC)", () => {
     const response = await app.inject({
       method: "GET",
       url: "/v1/deals?limit=5",
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(viewerEmail) },
     });
     expect(response.statusCode).toBe(200);
     const body = response.json() as { deals: Array<Record<string, unknown>> };
@@ -200,43 +212,94 @@ suite("authenticated deal review routes (RBAC)", () => {
     expect(listed?.expectedProfitCents).toBe("2500");
   });
 
+  it("rejects a tenant selector that belongs to another user", async () => {
+    const { accessToken } = await login(viewerEmail);
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/deals",
+      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(adminEmail) },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "TENANT_ACCESS_DENIED" });
+  });
+
+  it("lists only the authenticated user's tenant memberships", async () => {
+    const { accessToken } = await login(viewerEmail);
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/tenants",
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().tenants).toEqual([
+      { id: tenantByEmail.get(viewerEmail), name: "Test workspace", role: "VIEWER" },
+    ]);
+  });
+
   it("forbids a viewer from reviewing a deal", async () => {
     const deal = await createDeal();
     const { accessToken } = await login(viewerEmail);
     const response = await app.inject({
       method: "POST",
       url: `/v1/deals/${deal.id}/review`,
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(viewerEmail) },
       payload: { decision: "APPROVED" },
     });
     expect(response.statusCode).toBe(403);
-    expect(response.json()).toEqual({ error: "ADMIN_ROLE_REQUIRED" });
-    const unchanged = await prisma.dealCandidate.findUniqueOrThrow({ where: { id: deal.id } });
-    expect(unchanged.reviewStatus).toBe("DISCOVERED");
+    expect(response.json()).toEqual({ error: "TENANT_ADMIN_ROLE_REQUIRED" });
+    expect(await prisma.dealReview.count({ where: { candidateId: deal.id } })).toBe(0);
   });
 
-  it("lets an admin approve once and rejects the repeated decision", async () => {
+  it("allows a tenant admin to update the review in its own tenant", async () => {
     const deal = await createDeal();
     const { accessToken } = await login(adminEmail);
     const first = await app.inject({
       method: "POST",
       url: `/v1/deals/${deal.id}/review`,
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(adminEmail) },
       payload: { decision: "APPROVED" },
     });
     expect(first.statusCode).toBe(200);
-    const body = first.json() as { deal: { reviewStatus: string; reviewedBy: string | null } };
-    expect(body.deal.reviewStatus).toBe("APPROVED");
-    expect(body.deal.reviewedBy).toEqual(expect.any(String));
+    const body = first.json() as { review: { decision: string; reviewerUserId: string } };
+    expect(body.review.decision).toBe("APPROVED");
+    expect(body.review.reviewerUserId).toEqual(expect.any(String));
 
     const second = await app.inject({
       method: "POST",
       url: `/v1/deals/${deal.id}/review`,
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(adminEmail) },
       payload: { decision: "REJECTED" },
     });
-    expect(second.statusCode).toBe(409);
-    expect(second.json()).toEqual({ error: "DEAL_REVIEW_CONFLICT" });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().review.decision).toBe("REJECTED");
+    expect(await prisma.dealReview.count({ where: { tenantId: tenantByEmail.get(adminEmail), candidateId: deal.id } })).toBe(1);
+  });
+
+  it("keeps one tenant's deal review invisible to another tenant", async () => {
+    const deal = await createDeal();
+    const admin = await login(adminEmail);
+    const approved = await app.inject({
+      method: "POST",
+      url: `/v1/deals/${deal.id}/review`,
+      headers: { authorization: `Bearer ${admin.accessToken}`, ...tenantHeader(adminEmail) },
+      payload: { decision: "APPROVED" },
+    });
+    expect(approved.statusCode).toBe(200);
+
+    const viewer = await login(viewerEmail);
+    const listed = await app.inject({
+      method: "GET",
+      url: "/v1/deals?limit=100",
+      headers: { authorization: `Bearer ${viewer.accessToken}`, ...tenantHeader(viewerEmail) },
+    });
+    expect(listed.statusCode).toBe(200);
+    const otherTenantDeal = (listed.json() as { deals: Array<{ id: string; reviewStatus: string }> })
+      .deals.find((entry) => entry.id === deal.id);
+    expect(otherTenantDeal?.reviewStatus).toBe("DISCOVERED");
+
+    const sharedCandidate = await prisma.dealCandidate.findUniqueOrThrow({ where: { id: deal.id } });
+    expect(sharedCandidate.reviewStatus).toBe("DISCOVERED");
+    expect(sharedCandidate.reviewedBy).toBeNull();
   });
 
   it("refuses to approve a simulated or risk-rejected candidate", async () => {
@@ -245,7 +308,7 @@ suite("authenticated deal review routes (RBAC)", () => {
     const response = await app.inject({
       method: "POST",
       url: `/v1/deals/${deal.id}/review`,
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(adminEmail) },
       payload: { decision: "APPROVED" },
     });
     expect(response.statusCode).toBe(422);
@@ -258,7 +321,7 @@ suite("authenticated deal review routes (RBAC)", () => {
     const invalidDecision = await app.inject({
       method: "POST",
       url: `/v1/deals/${deal.id}/review`,
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(adminEmail) },
       payload: { decision: "PUBLISHED" },
     });
     expect(invalidDecision.statusCode).toBe(400);
@@ -267,7 +330,7 @@ suite("authenticated deal review routes (RBAC)", () => {
     const missing = await app.inject({
       method: "POST",
       url: "/v1/deals/does-not-exist/review",
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: { authorization: `Bearer ${accessToken}`, ...tenantHeader(adminEmail) },
       payload: { decision: "REJECTED" },
     });
     expect(missing.statusCode).toBe(404);

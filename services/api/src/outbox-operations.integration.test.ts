@@ -96,8 +96,8 @@ suite("outbox operations", () => {
   });
 
   it("retries with a redacted error and then dead-letters at the attempt limit", async () => {
-    await createEvent();
-    const options = { workerId: "worker-1", leaseSeconds: 30, maxAttempts: 2, baseRetrySeconds: 5 };
+    const event = await createEvent();
+    const options = { workerId: "worker-1", leaseSeconds: 30, maxAttempts: 2, baseRetrySeconds: 5, aggregateId: event.aggregateId };
 
     const first = await processOneOutboxMessage(prisma, options, async () => {
       throw new Error("handler failed for https://private.example/x token=abc123");
@@ -132,7 +132,7 @@ suite("outbox operations", () => {
   it("fails the handler when its lease was taken over (fencing)", async () => {
     const event = await createEvent();
     await expect(
-      processOneOutboxMessage(prisma, { workerId: "worker-a", leaseSeconds: 30 }, async () => {
+      processOneOutboxMessage(prisma, { workerId: "worker-a", leaseSeconds: 30, aggregateId: event.aggregateId }, async () => {
         // Another worker wins the expired lease while this handler is running.
         await prisma.outboxEvent.update({
           where: { id: event.id },
