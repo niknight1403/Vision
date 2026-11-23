@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { PrismaClient, type Prisma } from "@prisma/client";
-import { claimAgentTask, completeAgentTask, failAgentTask, PermanentTaskError, recoverExpiredAgentTasks } from "./agent-task-service.js";
+import { claimNextAgentTask, completeAgentTask, failAgentTask, PermanentTaskError, recoverExpiredAgentTasks } from "./agent-task-service.js";
 import { heartbeatTaskLease } from "./agent-orchestrator.js";
 const prisma = new PrismaClient();
 const workerId = process.env.AGENT_WORKER_ID ?? "treasure-worker-" + randomUUID();
@@ -14,9 +14,8 @@ if (!Number.isInteger(pollMs) || pollMs < 250 || pollMs > 30000) throw new Error
 let stopping = false;
 process.on("SIGINT", () => { stopping = true; }); process.on("SIGTERM", () => { stopping = true; });
 async function claimTask() {
-  const candidate = await prisma.agentTask.findFirst({ where: { taskType: "HIDDEN_TREASURE_ANALYSIS", status: "QUEUED", availableAt: { lte: new Date() } }, orderBy: { createdAt: "asc" } });
-  if (!candidate || candidate.attempt >= candidate.maxAttempts) return null;
-  try { return await claimAgentTask(prisma, candidate.id, workerId, leaseSeconds); } catch { return null; }
+  // A unique owner per claim fences off any stale execution from this process.
+  return claimNextAgentTask(prisma, "HIDDEN_TREASURE_ANALYSIS", `${workerId}:${randomUUID()}`, leaseSeconds);
 }
 function safeMinor(value: unknown, field: string): number {
   if (typeof value !== "string" || !/^\d+$/.test(value)) throw new PermanentTaskError("TASK_INPUT_INVALID_" + field);
@@ -24,14 +23,16 @@ function safeMinor(value: unknown, field: string): number {
 }
 async function execute(task: NonNullable<Awaited<ReturnType<typeof claimTask>>>) {
   const input = task.input as Record<string, unknown>; let leaseLost = false;
-  const timer = setInterval(() => void heartbeatTaskLease(prisma, task.id, workerId, leaseSeconds).catch(() => { leaseLost = true; }), 25_000);
+  const leaseOwner = task.lockedBy;
+  if (!leaseOwner) throw new Error("TASK_LEASE_OWNER_MISSING");
+  const timer = setInterval(() => void heartbeatTaskLease(prisma, task.id, leaseOwner, leaseSeconds).catch(() => { leaseLost = true; }), 25_000);
   try {
     const purchasePrice = safeMinor(input.purchasePriceMinor, "PURCHASE_PRICE"); const totalCost = safeMinor(input.totalCostCents, "TOTAL_COST");
     const response = await fetch(new URL("/v1/analyze", endpoint), { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify({ candidate_id: String(input.dealId ?? ""), title: String(input.title ?? ""), description: "", image_url: String(input.imageUrl ?? ""), asking_price_minor: purchasePrice, known_costs_minor: Math.max(0, totalCost - purchasePrice), currency: String(input.currency ?? "EUR") }), signal: AbortSignal.timeout(90_000) });
     if (!response.ok) throw new Error("VISION_WORKER_HTTP_" + response.status);
     const result = await response.json() as Prisma.InputJsonObject; if (leaseLost) throw new Error("TASK_LEASE_LOST");
-    await completeAgentTask(prisma, task.id, workerId, result);
-  } catch (error) { if (!leaseLost) { try { await failAgentTask(prisma, task.id, workerId, error); } catch { /* stale completion fenced */ } } } finally { clearInterval(timer); }
+    await completeAgentTask(prisma, task.id, leaseOwner, result);
+  } catch (error) { if (!leaseLost) { try { await failAgentTask(prisma, task.id, leaseOwner, error); } catch { /* stale completion fenced */ } } } finally { clearInterval(timer); }
 }
 async function main() { try { while (!stopping) { await recoverExpiredAgentTasks(prisma); const task = await claimTask(); if (task) await execute(task); else await sleep(pollMs); } } finally { await prisma.$disconnect(); } }
 main().catch(async (error: unknown) => { process.stderr.write("Agent task worker stopped: " + (error instanceof Error ? error.message : "unknown error") + "\n"); await prisma.$disconnect(); process.exitCode = 1; });

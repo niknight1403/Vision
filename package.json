@@ -1,6 +1,6 @@
 {
   "name": "autonomagent",
-  "version": "0.3.0",
+  "version": "0.4.0-vision-alpha",
   "private": true,
   "description": "Android-first controlled product arbitrage workspace",
   "workspaces": [

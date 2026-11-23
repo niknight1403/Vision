@@ -1,6 +1,6 @@
 {
   "name": "@autonomagent/api",
-  "version": "0.3.0",
+  "version": "0.4.0-vision-alpha",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run src --exclude '**/*.integration.test.ts'",
     "test": "npm run test:unit",
-    "test:db": "node scripts/require-postgres.mjs && vitest run integration.test --reporter=default --reporter=json --outputFile=/tmp/autonomagent-api-db-report.json && node scripts/verify-db-integration.mjs /tmp/autonomagent-api-db-report.json",
+    "test:db": "node scripts/require-postgres.mjs && vitest run integration.test --no-file-parallelism --reporter=default --reporter=json --outputFile=/tmp/autonomagent-api-db-report.json && node scripts/verify-db-integration.mjs /tmp/autonomagent-api-db-report.json",
     "worker": "tsx src/agent-task-worker.ts"
   },
   "dependencies": {
@@ -18,7 +18,7 @@
     "@fastify/helmet": "^13.0.1",
     "@prisma/client": "^6.5.0",
     "fastify": "^5.2.1",
-    "@autonomagent/trading-core": "0.3.0"
+    "@autonomagent/trading-core": "0.4.0-vision-alpha"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
