@@ -1,6 +1,6 @@
 {
   "name": "@autonomagent/trading-core",
-  "version": "0.3.0",
+  "version": "0.4.0-vision-alpha",
   "private": true,
   "type": "module",
   "main": "src/index.ts",

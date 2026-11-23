@@ -4,6 +4,8 @@
 
 - Authenticated ADMIN-only Vision analysis submission and task status endpoints.
 - Durable PostgreSQL AgentTask queue with idempotency, lease-based worker claims, bounded retries, and task result persistence.
+- Atomic PostgreSQL task claims using `FOR UPDATE SKIP LOCKED`; task status, lease, attempt count, and `agent.task.started` outbox event are committed together.
+- Per-claim fencing tokens prevent stale worker executions from completing a task after its lease has been taken over.
 - Private Python Vision service with exact-host HTTPS image allowlisting, bounded image downloads, image signature checks, and configurable OpenAI-compatible vision model.
 - Six parallel specialist roles: visual identification, market research, collector rarity, technical/parts, restoration, and risk/authenticity.
 - Evidence-aware assessment: no verified resale valuation without at least two recent sold comparables in the matching currency.
@@ -19,4 +21,4 @@
 
 ## Verification
 
-GitHub Actions CI runs Python specialist tests, Prisma validation/migrations, API build/typecheck/integration tests, dependency audit, and Expo Android export. Refer to the latest CI run linked from the Vision PR before promoting this alpha to production.
+GitHub Actions CI runs Python specialist tests, Prisma validation/migrations, API build/typecheck/integration tests, dependency audit, and Expo Android export. PostgreSQL integration test files run serially to prevent concurrent test fixtures from claiming each other's outbox rows. Refer to the latest CI run linked from the Vision PR before promoting this alpha to production.
