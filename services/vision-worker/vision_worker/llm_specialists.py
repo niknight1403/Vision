@@ -9,7 +9,6 @@ import json
 from typing import Awaitable, Callable
 
 from openai import AsyncOpenAI
-from pydantic import ValidationError
 
 from .hidden_treasure_swarm import (
     ComparableSale,
@@ -66,8 +65,8 @@ def build_llm_specialists(
         prompt = (
             f"Role: {role.value}. {ROLE_INSTRUCTIONS[role]} "
             "Return one JSON object with keys: summary, facts (array of strings), "
-            "identified_model (string or null), evidence_urls (array; only URLs actually "
-            "present in input), confidence (0..1), uncertainties (array of strings). "
+            "identified_model (string or null), evidence_urls (empty array; no verified "
+            "source URLs are supplied), confidence (0..1), uncertainties (array of strings). "
             "Do not invent sources, prices, URLs, or facts. If evidence is weak, lower "
             "confidence and state what is unknown. Product evidence: "
             + json.dumps(payload, ensure_ascii=False)
@@ -82,10 +81,23 @@ def build_llm_specialists(
         if not raw:
             raise ValueError("Empty specialist response")
         data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("Invalid specialist response")
+        # ProductBrief contains observations, not authenticated source URLs or
+        # sold records. A model's claim of evidence cannot become market evidence.
+        unsupported_evidence = bool(data.get("evidence_urls") or data.get("comparable_sales"))
+        uncertainties = data.get("uncertainties", [])
+        if unsupported_evidence:
+            if not isinstance(uncertainties, list):
+                uncertainties = []
+            uncertainties = [*uncertainties, "Model-supplied source claims were discarded; no verified source was provided."]
         return SpecialistFinding.model_validate({
             **data,
             "role": role,
             "status": "SUCCEEDED",
+            "evidence_urls": [],
+            "comparable_sales": [],
+            "uncertainties": uncertainties,
         })
 
     async def market_adapter(brief: ProductBrief) -> SpecialistFinding:
