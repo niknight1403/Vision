@@ -1,65 +1,15 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet,
   Text, TextInput, View,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
+import {
+  ApiClient, ApiError, isPollableTaskStatus, pollTaskStatus,
+  type Deal, type PollSnapshot, type PollingState, type TreasureAnalysisTask,
+} from "./src/api";
 
 const API_BASE_URL = (process.env.EXPO_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-
-type Deal = {
-  id: string;
-  title: string;
-  productUrl: string;
-  currency: string;
-  purchasePriceMinor: string;
-  totalCostCents: string;
-  expectedProfitCents: string;
-  simulated: boolean;
-  riskPassed: boolean;
-  riskReasons: string[];
-  reviewStatus: string;
-};
-type Finding = {
-  role: string;
-  status: string;
-  summary: string;
-  confidence: number;
-  uncertainties: string[];
-};
-type Assessment = {
-  status: string;
-  score: number;
-  valuation_status: string;
-  resale_value_low_minor: number | null;
-  resale_value_high_minor: number | null;
-  estimated_net_low_minor: number | null;
-  estimated_net_high_minor: number | null;
-  comparable_count: number;
-  currency: string;
-  confidence: number;
-  findings: Finding[];
-  conflicts: string[];
-  next_actions: string[];
-  purchase_authorized: boolean;
-};
-type Task = {
-  taskId: string;
-  status: string;
-  result?: {
-    assessment?: Assessment;
-    visual_inspection?: {
-      identified?: boolean;
-      exact_model?: string;
-      condition_grade?: string;
-      details?: string;
-      uncertainty_notes?: string[];
-    };
-    purchase_authorized?: boolean;
-    authenticity_verified?: boolean;
-  } | null;
-  hasError?: boolean;
-};
 
 const roleLabels: Record<string, string> = {
   visual_identification: "Bild- & Modell-Erkennung",
@@ -73,14 +23,42 @@ const money = (minor: number | null, currency = "EUR") =>
   minor === null ? "Keine belastbare Bewertung" :
     new Intl.NumberFormat("de-DE", { style: "currency", currency }).format(minor / 100);
 
-async function apiError(response: Response): Promise<string> {
-  try {
-    const body = await response.json() as { error?: string; detail?: string };
-    return body.error ?? body.detail ?? "API_REQUEST_FAILED";
-  } catch {
-    return "API_REQUEST_FAILED";
+/** Maps a typed client error to a short, non-technical UI message. */
+function errorText(cause: unknown): string {
+  if (!(cause instanceof ApiError)) return "UNBEKANNTER_FEHLER · Bitte erneut versuchen.";
+  switch (cause.kind) {
+    case "network":
+      return "NETZFEHLER · Keine Verbindung zur API. Der letzte Stand bleibt sichtbar.";
+    case "timeout":
+      return "ZEITUEBERSCHREITUNG · Die API hat nicht rechtzeitig geantwortet.";
+    case "aborted":
+      return "ABGEBROCHEN · Die Anfrage wurde beendet.";
+    case "session_expired":
+      return "SITZUNG ABGELAUFEN · Bitte erneut anmelden.";
+    case "rate_limited":
+      return cause.retryAfterMs
+        ? `RATE-LIMIT · Zu viele Anfragen. Erneut in ${Math.ceil(cause.retryAfterMs / 1000)} s.`
+        : "RATE-LIMIT · Zu viele Anfragen. Bitte kurz warten.";
+    case "server":
+      return `SERVERFEHLER${cause.status ? ` ${cause.status}` : ""} · Bitte erneut versuchen.`;
+    case "invalid_json":
+      return "UNGUELTIGE_ANTWORT · Die API-Antwort war nicht lesbar.";
+    default:
+      return cause.code ? `${cause.message} · ${cause.code}` : cause.message;
   }
 }
+
+const pollNote = (state: PollingState | undefined): string | null => {
+  if (state === "offline") {
+    return "OFFLINE · Keine Verbindung. Der letzte Stand bleibt sichtbar, die App fragt mit wachsendem Abstand erneut.";
+  }
+  if (state === "error") {
+    return "POLLING_FEHLER · Die Statusabfrage ist endgueltig fehlgeschlagen. Erneut pruefen startet einen neuen Versuch.";
+  }
+  if (state === "expired") return "SITZUNG ABGELAUFEN · Bitte erneut anmelden.";
+  return null;
+};
+
 function Panel({ children }: { children: React.ReactNode }) {
   return <View style={styles.panel}>{children}</View>;
 }
@@ -94,10 +72,13 @@ function ActionButton({ title, onPress, disabled = false }: {
     </Pressable>
   );
 }
-function TaskResult({ task }: { task: Task }) {
+function TaskResult({ task, pollState, onRetry }: {
+  task: TreasureAnalysisTask; pollState?: PollingState; onRetry: () => void;
+}) {
   const assessment = task.result?.assessment;
   const visual = task.result?.visual_inspection;
   const isPolling = task.status === "QUEUED" || task.status === "RUNNING" || task.status === "CHECKPOINTED";
+  const note = pollNote(pollState);
   return (
     <Panel>
       <View style={styles.rowBetween}>
@@ -139,53 +120,91 @@ function TaskResult({ task }: { task: Task }) {
         <View style={styles.progress}><ActivityIndicator color="#8DB5FF" /><Text style={styles.bodyText}>Spezialisten analysieren den Fund. Ergebnis wird automatisch aktualisiert.</Text></View>
       ) : task.status === "FAILED" ? <Text style={styles.error}>FAILED · Die Analyse ist fehlgeschlagen. Keine automatische fachliche Wiederholung wurde ausgelöst.</Text>
         : <Text style={styles.warning}>Noch kein Analyseergebnis vorhanden. Status und Fehlerprotokoll im Backend prüfen.</Text>}
+      {note && <Text style={styles.warning}>{note}</Text>}
+      {note && pollState !== "expired" && (
+        <Pressable accessibilityRole="button" onPress={onRetry}><Text style={styles.link}>Status erneut prüfen</Text></Pressable>
+      )}
       <Text style={styles.safetyNote}>Keine Echtheitsgarantie · keine Kauf-Freigabe · keine Verkäuferkontaktaufnahme.</Text>
     </Panel>
   );
 }
 
 export default function AutopilotDashboard() {
+  const client = useMemo(
+    () => (API_BASE_URL ? new ApiClient({ baseUrl: API_BASE_URL }) : null),
+    [],
+  );
+  const pollersRef = useRef<Map<string, { stop: () => void }>>(new Map());
+  const finishedRef = useRef<Set<string>>(new Set());
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [signedIn, setSignedIn] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
-  const [tasks, setTasks] = useState<Record<string, Task>>({});
+  const [tasks, setTasks] = useState<Record<string, TreasureAnalysisTask>>({});
+  const [pollStates, setPollStates] = useState<Record<string, PollingState>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadDeals = useCallback(async (token: string) => {
-    const response = await fetch(API_BASE_URL + "/v1/deals?limit=50", {
-      headers: { authorization: "Bearer " + token },
-    });
-    if (!response.ok) throw new Error(await apiError(response));
-    const body = await response.json() as { deals: Deal[] };
-    setDeals(body.deals);
+  const stopAllPollers = useCallback(() => {
+    for (const poller of pollersRef.current.values()) poller.stop();
+    pollersRef.current.clear();
   }, []);
 
+  const resetToSignedOut = useCallback((message: string | null) => {
+    stopAllPollers();
+    finishedRef.current.clear();
+    client?.session.clear();
+    setSignedIn(false);
+    setDeals([]);
+    setTasks({});
+    setPollStates({});
+    setPassword("");
+    setError(message);
+  }, [client, stopAllPollers]);
+
+  const handleError = useCallback((cause: unknown) => {
+    if (cause instanceof ApiError && cause.kind === "session_expired") {
+      resetToSignedOut("SITZUNG ABGELAUFEN · Bitte erneut anmelden.");
+      return;
+    }
+    setError(errorText(cause));
+  }, [resetToSignedOut]);
+
   const signIn = useCallback(async () => {
-    if (!API_BASE_URL) {
+    if (!client) {
       setError("EXPO_PUBLIC_API_URL ist nicht gesetzt. Bitte die API-URL in der App-Build-Umgebung konfigurieren.");
       return;
     }
     setBusy(true); setError(null);
     try {
-      const response = await fetch(API_BASE_URL + "/v1/auth/login", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      if (!response.ok) throw new Error(await apiError(response));
-      const tokens = await response.json() as { accessToken: string };
-      setAccessToken(tokens.accessToken); setPassword("");
-      await loadDeals(tokens.accessToken);
+      await client.login(email, password);
+      setPassword("");
+      setSignedIn(true);
+      setDeals(await client.listDeals({ limit: 50 }));
     } catch (cause) {
-      setAccessToken(null);
-      setError(cause instanceof Error ? cause.message : "LOGIN_FAILED");
+      client.session.clear();
+      setSignedIn(false);
+      setError(errorText(cause));
     } finally { setBusy(false); }
-  }, [email, password, loadDeals]);
+  }, [client, email, password]);
+
+  const loadDeals = useCallback(async () => {
+    if (!client) return;
+    try {
+      setDeals(await client.listDeals({ limit: 50 }));
+      setError(null);
+    } catch (cause) { handleError(cause); }
+  }, [client, handleError]);
+
+  const signOut = useCallback(() => {
+    void client?.logout();
+    resetToSignedOut(null);
+  }, [client, resetToSignedOut]);
 
   const startAnalysis = useCallback(async (deal: Deal) => {
-    if (!accessToken) return;
+    if (!client) return;
     const imageUrl = (imageUrls[deal.id] ?? "").trim();
     if (!/^https:\/\//i.test(imageUrl)) {
       setError("Bitte eine HTTPS-Bildadresse eintragen. Die Bilddomain muss serverseitig freigegeben sein.");
@@ -193,55 +212,59 @@ export default function AutopilotDashboard() {
     }
     setBusy(true); setError(null);
     try {
-      const response = await fetch(API_BASE_URL + "/v1/deals/" + encodeURIComponent(deal.id) + "/treasure-analysis", {
-        method: "POST",
-        headers: {
-          authorization: "Bearer " + accessToken,
-          "content-type": "application/json",
-          "x-idempotency-key": "mobile-" + Date.now() + "-" + Math.random().toString(36).slice(2),
-        },
-        body: JSON.stringify({ imageUrl }),
-      });
-      if (!response.ok) throw new Error(await apiError(response));
-      const task = await response.json() as { taskId: string; status: string };
+      const task = await client.startTreasureAnalysis(deal.id, imageUrl);
       setTasks((current) => ({ ...current, [deal.id]: { taskId: task.taskId, status: task.status } }));
+      setPollStates((current) => ({ ...current, [deal.id]: "loading" }));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "ANALYSIS_ENQUEUE_FAILED");
+      handleError(cause);
     } finally { setBusy(false); }
-  }, [accessToken, imageUrls]);
+  }, [client, imageUrls, handleError]);
 
+  const retryPolling = useCallback((dealId: string) => {
+    const task = tasks[dealId];
+    if (!task) return;
+    finishedRef.current.delete(task.taskId);
+    setError(null);
+    // A fresh object identity re-runs the polling effect below.
+    setTasks((current) => ({ ...current, [dealId]: { ...task } }));
+  }, [tasks]);
+
+  // One poller per task id. The layer owns backoff, 429 and session expiry.
   useEffect(() => {
-    if (!accessToken) return;
-    const active = Object.entries(tasks).filter(([, task]) =>
-      task.status === "QUEUED" || task.status === "RUNNING" || task.status === "CHECKPOINTED"
-    );
-    if (!active.length) return;
-    let cancelled = false;
-    let inFlight = false;
-    const poll = async () => {
-      if (cancelled || inFlight) return;
-      inFlight = true;
-      for (const [dealId, task] of active) {
-        try {
-          const response = await fetch(API_BASE_URL + "/v1/treasure-analyses/" + encodeURIComponent(task.taskId), {
-            headers: { authorization: "Bearer " + accessToken },
-          });
-          if (!response.ok) {
-            if (!cancelled) setError(`POLLING_FAILED · ${await apiError(response)}`);
-            continue;
+    if (!client || !signedIn) return;
+    for (const [dealId, task] of Object.entries(tasks)) {
+      if (!isPollableTaskStatus(task.status)) continue;
+      if (finishedRef.current.has(task.taskId)) continue;
+      if (pollersRef.current.has(task.taskId)) continue;
+
+      const handle = pollTaskStatus({
+        client,
+        taskId: task.taskId,
+        onSnapshot: (snapshot: PollSnapshot) => {
+          setPollStates((current) => ({ ...current, [dealId]: snapshot.state }));
+          const next = snapshot.task;
+          if (next) {
+            setTasks((current) => (
+              current[dealId]?.taskId === next.taskId ? { ...current, [dealId]: next } : current
+            ));
           }
-          const next = await response.json() as Task;
-          if (!cancelled) setTasks((current) => ({ ...current, [dealId]: next }));
-        } catch {
-          if (!cancelled) setError("POLLING_RETRYING · Netzwerkfehler; der letzte Status bleibt sichtbar und wird erneut abgefragt.");
+        },
+      });
+      pollersRef.current.set(task.taskId, handle);
+      void handle.promise.then((final) => {
+        pollersRef.current.delete(task.taskId);
+        finishedRef.current.add(task.taskId);
+        setPollStates((current) => ({ ...current, [dealId]: final.state }));
+        if (final.state === "expired") {
+          resetToSignedOut("SITZUNG ABGELAUFEN · Bitte erneut anmelden.");
+        } else if (final.state === "error" && final.error) {
+          setError(errorText(final.error));
         }
-      }
-      inFlight = false;
-    };
-    void poll();
-    const timer = setInterval(() => { void poll(); }, 2000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [accessToken, tasks]);
+      });
+    }
+  }, [client, signedIn, tasks, resetToSignedOut]);
+
+  useEffect(() => () => stopAllPollers(), [stopAllPollers]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -254,7 +277,7 @@ export default function AutopilotDashboard() {
           <Text style={styles.muted}>Produktdaten und Analysen werden serverseitig über konfigurierte Provider verarbeitet.</Text>
         </View>
 
-        {!accessToken ? (
+        {!signedIn ? (
           <Panel>
             <Text style={styles.panelTitle}>Kontrollzentrum öffnen</Text><Text style={styles.bodyText}>Melde dich an, um Produktkandidaten und laufende Analysen zu sehen.</Text>
             <TextInput value={email} onChangeText={setEmail} placeholder="E-Mail" placeholderTextColor="#7183A3" autoCapitalize="none" keyboardType="email-address" style={styles.input} />
@@ -264,10 +287,10 @@ export default function AutopilotDashboard() {
           </Panel>
         ) : (
           <>
-            <View style={styles.overview}><View><Text style={styles.label}>PRODUKTKANDIDATEN</Text><Text style={styles.overviewValue}>{deals.length}</Text></View><View><Text style={styles.label}>ANALYSEN</Text><Text style={styles.overviewValue}>{Object.keys(tasks).length}</Text></View><View><Text style={styles.label}>AKTIV</Text><Text style={styles.overviewValue}>{Object.values(tasks).filter((task) => ["QUEUED", "RUNNING", "CHECKPOINTED"].includes(task.status)).length}</Text></View></View>
+            <View style={styles.overview}><View><Text style={styles.label}>PRODUKTKANDIDATEN</Text><Text style={styles.overviewValue}>{deals.length}</Text></View><View><Text style={styles.label}>ANALYSEN</Text><Text style={styles.overviewValue}>{Object.keys(tasks).length}</Text></View><View><Text style={styles.label}>AKTIV</Text><Text style={styles.overviewValue}>{Object.values(tasks).filter((task) => isPollableTaskStatus(task.status)).length}</Text></View></View>
             <View style={styles.rowBetween}>
               <Text style={styles.section}>Produktkandidaten</Text>
-              <Pressable onPress={() => void loadDeals(accessToken).catch((e) => setError(String(e)))}><Text style={styles.link}>Aktualisieren</Text></Pressable>
+              <Pressable onPress={() => void loadDeals()}><Text style={styles.link}>Aktualisieren</Text></Pressable>
             </View>
             {deals.length === 0 ? <Panel><Text style={styles.bodyText}>Keine Produktkandidaten gefunden. Zuerst Produkte über eine angeschlossene Datenquelle erfassen.</Text></Panel> :
               deals.map((deal) => (
@@ -281,11 +304,17 @@ export default function AutopilotDashboard() {
                     placeholder="HTTPS-Bildadresse des Produkts" placeholderTextColor="#7183A3" autoCapitalize="none" style={styles.input} />
                   <ActionButton title={busy ? "Bitte warten …" : "6 Spezialisten analysieren lassen"}
                     onPress={() => void startAnalysis(deal)} disabled={busy || !deal.id} />
-                  {tasks[deal.id] && <TaskResult task={tasks[deal.id]!} />}
+                  {tasks[deal.id] && (
+                    <TaskResult
+                      task={tasks[deal.id]!}
+                      pollState={pollStates[deal.id]}
+                      onRetry={() => retryPolling(deal.id)}
+                    />
+                  )}
                 </Panel>
               ))
             }
-            <ActionButton title="Abmelden" onPress={() => { setAccessToken(null); setDeals([]); setTasks({}); }} />
+            <ActionButton title="Abmelden" onPress={signOut} />
           </>
         )}
         {error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
