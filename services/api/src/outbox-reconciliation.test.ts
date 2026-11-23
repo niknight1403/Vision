@@ -1,0 +1,140 @@
+import { describe, expect, it } from "vitest";
+import { reconcileOutboxEvents, type ReconciliationEvent } from "./outbox-reconciliation.js";
+
+const now = new Date("2026-11-20T12:00:00.000Z");
+function event(overrides: Partial<ReconciliationEvent> = {}): ReconciliationEvent {
+  return {
+    id: "event-1", eventType: "wallet.reservation.created", status: "PUBLISHED",
+    attempts: 1, availableAt: new Date("2026-11-20T11:00:00.000Z"),
+    leaseUntil: null, lockedBy: null, publishedAt: new Date("2026-11-20T11:01:00.000Z"),
+    createdAt: new Date("2026-11-20T11:00:00.000Z"), consumerReceipts: [],
+    ...overrides,
+  };
+}
+
+describe("read-only outbox reconciliation", () => {
+  it("reports missing required consumer receipts without requiring unrelated consumers", () => {
+    const report = reconcileOutboxEvents(
+      [event({ consumerReceipts: [{ consumerName: "audit", processedAt: now }] })],
+      { "wallet.reservation.created": ["audit", "ledger-projection"] },
+      { now },
+    );
+    expect(report.scanned).toBe(1);
+    expect(report.counts.PUBLISHED).toBe(1);
+    expect(report.findings).toEqual([{
+      code: "REQUIRED_RECEIPT_MISSING", severity: "CRITICAL",
+      eventId: "event-1", eventType: "wallet.reservation.created",
+      consumerName: "ledger-projection",
+    }]);
+  });
+
+  it("detects incomplete and expired processing leases and unexpected locks", () => {
+    const report = reconcileOutboxEvents([
+      event({ id: "incomplete", status: "PROCESSING", lockedBy: null, leaseUntil: null, publishedAt: null }),
+      event({ id: "expired", status: "PROCESSING", lockedBy: "worker-a", leaseUntil: new Date("2026-11-20T11:59:00.000Z"), publishedAt: null }),
+      event({ id: "unexpected", status: "PENDING", lockedBy: "worker-b", leaseUntil: null, publishedAt: null, availableAt: now }),
+    ], {}, { now });
+    expect(report.findings.map((finding) => [finding.eventId, finding.code])).toEqual([
+      ["expired", "EXPIRED_LEASE"],
+      ["incomplete", "PROCESSING_LEASE_INCOMPLETE"],
+      ["unexpected", "UNEXPECTED_LOCK"],
+    ]);
+  });
+
+  it("flags missing published timestamps, dead letters and overdue pending events", () => {
+    const report = reconcileOutboxEvents([
+      event({ id: "no-published-at", publishedAt: null }),
+      event({ id: "dead", status: "DEAD_LETTER", publishedAt: null }),
+      event({ id: "old-pending", status: "PENDING", publishedAt: null, availableAt: new Date("2026-11-20T11:00:00.000Z") }),
+    ], {}, { now, pendingWarningSeconds: 60 });
+    expect(report.findings.map((finding) => [finding.eventId, finding.code])).toEqual([
+      ["dead", "DEAD_LETTER"],
+      ["no-published-at", "PUBLISHED_TIMESTAMP_MISSING"],
+      ["old-pending", "PENDING_OVERDUE"],
+    ]);
+  });
+
+  it("treats exact lease expiry and exact pending threshold as not overdue", () => {
+    const report = reconcileOutboxEvents([
+      event({ id: "lease-at-boundary", status: "PROCESSING", lockedBy: "worker", leaseUntil: now, publishedAt: null }),
+      event({ id: "pending-at-boundary", status: "PENDING", publishedAt: null, availableAt: new Date(now.getTime() - 60_000) }),
+    ], {}, { now, pendingWarningSeconds: 60 });
+    expect(report.findings).toEqual([]);
+    expect(report.counts.PROCESSING).toBe(1);
+    expect(report.counts.PENDING).toBe(1);
+  });
+
+  it("flags a pending event when the warning threshold is zero and it is already due", () => {
+    const report = reconcileOutboxEvents([
+      event({ status: "PENDING", publishedAt: null, availableAt: new Date(now.getTime() - 1) }),
+    ], {}, { now, pendingWarningSeconds: 0 });
+    expect(report.findings).toContainEqual(expect.objectContaining({ code: "PENDING_OVERDUE", eventId: "event-1" }));
+  });
+
+  it("rejects invalid thresholds", () => {
+    expect(() => reconcileOutboxEvents([], {}, { pendingWarningSeconds: -1 }))
+      .toThrow("INVALID_PENDING_WARNING_SECONDS");
+    expect(() => reconcileOutboxEvents([], {}, { pendingWarningSeconds: Number.NaN }))
+      .toThrow("INVALID_PENDING_WARNING_SECONDS");
+  });
+
+  it("returns identical findings for permuted events and consumer configuration", () => {
+    const eventA = event({ id: "event-a", publishedAt: null });
+    const eventB = event({ id: "event-b", publishedAt: null });
+    const first = reconcileOutboxEvents(
+      [eventB, eventA],
+      { "wallet.reservation.created": ["consumer-z", "consumer-a"] },
+      { now },
+    );
+    const second = reconcileOutboxEvents(
+      [eventA, eventB],
+      { "wallet.reservation.created": ["consumer-a", "consumer-z"] },
+      { now },
+    );
+
+    expect(first).toEqual(second);
+    expect(first.findings.map(({ eventId, code, consumerName }) => [eventId, code, consumerName ?? null])).toEqual([
+      ["event-a", "PUBLISHED_TIMESTAMP_MISSING", null],
+      ["event-a", "REQUIRED_RECEIPT_MISSING", "consumer-a"],
+      ["event-a", "REQUIRED_RECEIPT_MISSING", "consumer-z"],
+      ["event-b", "PUBLISHED_TIMESTAMP_MISSING", null],
+      ["event-b", "REQUIRED_RECEIPT_MISSING", "consumer-a"],
+      ["event-b", "REQUIRED_RECEIPT_MISSING", "consumer-z"],
+    ]);
+  });
+  it("deduplicates repeated required-consumer configuration", () => {
+    const report = reconcileOutboxEvents(
+      [event({ publishedAt: null })],
+      { "wallet.reservation.created": ["ledger-projection", "ledger-projection", "audit"] },
+      { now },
+    );
+
+    expect(report.findings.filter((finding) => finding.code === "REQUIRED_RECEIPT_MISSING"))
+      .toEqual([
+        {
+          code: "REQUIRED_RECEIPT_MISSING", severity: "CRITICAL",
+          eventId: "event-1", eventType: "wallet.reservation.created", consumerName: "audit",
+        },
+        {
+          code: "REQUIRED_RECEIPT_MISSING", severity: "CRITICAL",
+          eventId: "event-1", eventType: "wallet.reservation.created", consumerName: "ledger-projection",
+        },
+      ]);
+  });
+
+
+  it("does not report a receipt-backed consumer repeated in configuration", () => {
+    const report = reconcileOutboxEvents(
+      [event({ consumerReceipts: [{ consumerName: "ledger-projection", processedAt: now }] })],
+      { "wallet.reservation.created": ["ledger-projection", "ledger-projection", "audit"] },
+      { now },
+    );
+
+    expect(report.findings.filter((finding) => finding.code === "REQUIRED_RECEIPT_MISSING"))
+      .toEqual([{
+        code: "REQUIRED_RECEIPT_MISSING", severity: "CRITICAL",
+        eventId: "event-1", eventType: "wallet.reservation.created", consumerName: "audit",
+      }]);
+  });
+
+});

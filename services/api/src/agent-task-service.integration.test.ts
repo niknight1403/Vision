@@ -1,19 +1,28 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import {
-  claimAgentTask, createAgentTask, failAgentTask, hashTaskInput, PermanentTaskError, recoverExpiredAgentTasks,
+  cancelAgentTask, claimAgentTask, createAgentTask, failAgentTask, hashTaskInput, PermanentTaskError, recoverExpiredAgentTasks,
 } from "./agent-task-service.js";
 
 const databaseEnabled = Boolean(process.env.DATABASE_URL);
 const suite = describe.skipIf(!databaseEnabled);
 const prisma = new PrismaClient();
-const ownerId = `task-retry-test-${process.pid}`;
+let ownerId = `task-retry-test-${process.pid}`;
+let tenantId = `task-retry-tenant-${process.pid}`;
 const taskIds: string[] = [];
+const auxiliaryTenantIds: string[] = [];
 let sequence = 0;
 
 suite("agent task retries (PostgreSQL)", () => {
   beforeAll(async () => {
     await prisma.$connect();
+    const user = await prisma.user.create({ data: {
+      email: `task-retry-${process.pid}@example.test`, passwordHash: "integration-test-hash",
+    } });
+    ownerId = user.id;
+    const tenant = await prisma.tenant.create({ data: { name: "Task retry test" } });
+    tenantId = tenant.id;
+    await prisma.tenantMembership.create({ data: { tenantId, userId: ownerId, role: "OWNER" } });
   });
 
   afterAll(async () => {
@@ -21,6 +30,9 @@ suite("agent task retries (PostgreSQL)", () => {
       await prisma.outboxEvent.deleteMany({ where: { aggregateId: { in: taskIds } } });
       await prisma.agentTask.deleteMany({ where: { id: { in: taskIds } } });
     }
+    await prisma.tenant.deleteMany({ where: { id: { in: auxiliaryTenantIds } } });
+    await prisma.tenant.delete({ where: { id: tenantId } });
+    await prisma.user.delete({ where: { id: ownerId } });
     await prisma.$disconnect();
   });
 
@@ -28,6 +40,7 @@ suite("agent task retries (PostgreSQL)", () => {
     sequence += 1;
     const task = await createAgentTask(prisma, {
       ownerId,
+      tenantId,
       taskType: "test",
       input: { sequence },
       idempotencyKey: `${ownerId}-${sequence}`,
@@ -54,6 +67,20 @@ suite("agent task retries (PostgreSQL)", () => {
     expect(secondClaim.attempt).toBe(2);
   });
 
+  it("requires the matching tenant when cancelling an owned task", async () => {
+    const task = await createTask();
+    const otherTenant = await prisma.tenant.create({ data: { name: "Other cancellation workspace" } });
+    auxiliaryTenantIds.push(otherTenant.id);
+
+    await expect(cancelAgentTask(prisma, task.id, ownerId, otherTenant.id))
+      .rejects.toThrow("TASK_NOT_CANCELLABLE");
+    const unchanged = await prisma.agentTask.findUniqueOrThrow({ where: { id: task.id } });
+    expect(unchanged.status).toBe("QUEUED");
+
+    const cancelled = await cancelAgentTask(prisma, task.id, ownerId, tenantId);
+    expect(cancelled.status).toBe("CANCELLED");
+  });
+
   it("marks a retryable error terminal at maxAttempts", async () => {
     const task = await createTask(1);
     await claimAgentTask(prisma, task.id, "worker-final");
@@ -77,8 +104,8 @@ suite("agent task retries (PostgreSQL)", () => {
     const inputOne = { product: { sku: "demo-1", region: "DE" }, flags: ["paper", "draft"] };
     const inputTwo = { flags: ["paper", "draft"], product: { region: "DE", sku: "demo-1" } };
     const [first, second] = await Promise.all([
-      createAgentTask(prisma, { ownerId, taskType: "catalog.preview", input: inputOne, idempotencyKey }),
-      createAgentTask(prisma, { ownerId, taskType: "catalog.preview", input: inputTwo, idempotencyKey }),
+      createAgentTask(prisma, { ownerId, tenantId, taskType: "catalog.preview", input: inputOne, idempotencyKey }),
+      createAgentTask(prisma, { ownerId, tenantId, taskType: "catalog.preview", input: inputTwo, idempotencyKey }),
     ]);
     taskIds.push(first.id);
     expect(second.id).toBe(first.id);
@@ -87,19 +114,19 @@ suite("agent task retries (PostgreSQL)", () => {
     expect(await prisma.outboxEvent.count({ where: { aggregateId: first.id } })).toBe(1);
 
     await expect(createAgentTask(prisma, {
-      ownerId, taskType: "catalog.preview", input: { product: { sku: "different" } }, idempotencyKey,
+      ownerId, tenantId, taskType: "catalog.preview", input: { product: { sku: "different" } }, idempotencyKey,
     })).rejects.toThrow("TASK_IDEMPOTENCY_CONFLICT");
 
     const raceKey = `${ownerId}-different-payload-race`;
     const outcomes = await Promise.allSettled([
-      createAgentTask(prisma, { ownerId, taskType: "catalog.preview", input: { choice: "left" }, idempotencyKey: raceKey }),
-      createAgentTask(prisma, { ownerId, taskType: "catalog.preview", input: { choice: "right" }, idempotencyKey: raceKey }),
+      createAgentTask(prisma, { ownerId, tenantId, taskType: "catalog.preview", input: { choice: "left" }, idempotencyKey: raceKey }),
+      createAgentTask(prisma, { ownerId, tenantId, taskType: "catalog.preview", input: { choice: "right" }, idempotencyKey: raceKey }),
     ]);
     expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
     const rejected = outcomes.find((outcome) => outcome.status === "rejected");
     expect(rejected?.status).toBe("rejected");
     if (rejected?.status === "rejected") expect(rejected.reason.message).toBe("TASK_IDEMPOTENCY_CONFLICT");
-    const raceWinner = await prisma.agentTask.findUniqueOrThrow({ where: { idempotencyKey: raceKey } });
+    const raceWinner = await prisma.agentTask.findUniqueOrThrow({ where: { tenantId_idempotencyKey: { tenantId, idempotencyKey: raceKey } } });
     taskIds.push(raceWinner.id);
     expect(await prisma.outboxEvent.count({ where: { aggregateId: raceWinner.id } })).toBe(1);
   });

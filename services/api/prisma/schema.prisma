@@ -13,6 +13,19 @@ enum UserRole {
   VIEWER
 }
 
+enum TenantRole {
+  OWNER
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+enum TenantReviewDecision {
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
 enum LedgerEntryType {
   DEPOSIT
   RESERVATION
@@ -41,6 +54,33 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   refreshSessions RefreshSession[]
+  memberships     TenantMembership[]
+}
+
+model Tenant {
+  id          String             @id @default(cuid())
+  name        String
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  memberships TenantMembership[]
+  wallets     WalletAccount[]
+  agentTasks  AgentTask[]
+  dealReviews DealReview[]
+  journalTransactions JournalTransaction[]
+}
+
+model TenantMembership {
+  id        String     @id @default(cuid())
+  tenantId  String
+  userId    String
+  role      TenantRole @default(VIEWER)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId, role])
 }
 
 model RefreshSession {
@@ -60,6 +100,8 @@ model RefreshSession {
 model WalletAccount {
   id                String         @id @default(cuid())
   ownerId           String
+  tenantId          String
+  tenant            Tenant         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   currency          String         @default("EUR")
   balanceCents      BigInt         @default(0)
   reservedCents     BigInt         @default(0)
@@ -68,7 +110,8 @@ model WalletAccount {
   updatedAt         DateTime       @updatedAt
   ledgerEntries     WalletLedger[]
 
-  @@unique([ownerId, currency])
+  @@unique([tenantId, ownerId, currency])
+  @@index([tenantId, createdAt])
 }
 
 model WalletLedger {
@@ -109,6 +152,18 @@ model OutboxEvent {
 
   @@index([status, availableAt])
   @@index([leaseUntil])
+  consumerReceipts OutboxConsumerReceipt[]
+}
+
+model OutboxConsumerReceipt {
+  id           String      @id @default(cuid())
+  consumerName String      @db.VarChar(128)
+  eventId      String
+  processedAt  DateTime    @default(now())
+  event        OutboxEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
+
+  @@unique([consumerName, eventId])
+  @@index([consumerName, processedAt])
 }
 
 model IdempotencyKey {
@@ -136,6 +191,8 @@ enum ExecutionStatus {
 model AgentTask {
   id             String          @id @default(cuid())
   ownerId        String
+  tenantId       String
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   taskType       String
   status         ExecutionStatus @default(QUEUED)
   input          Json
@@ -143,7 +200,7 @@ model AgentTask {
   result         Json?
   checkpoint     Json?
   correlationId  String?
-  idempotencyKey String          @unique
+  idempotencyKey String
   attempt        Int             @default(0)
   maxAttempts    Int             @default(3)
   availableAt    DateTime        @default(now())
@@ -157,6 +214,8 @@ model AgentTask {
 
   @@index([status, createdAt])
   @@index([status, availableAt])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, createdAt])
   @@index([ownerId, createdAt])
   @@index([leaseUntil])
 }
@@ -188,6 +247,7 @@ model DealCandidate {
   reviewedAt               DateTime?
   createdAt                DateTime         @default(now())
   updatedAt                DateTime         @updatedAt
+  reviews                  DealReview[]
 
   @@unique([providerId, externalId])
   @@index([reviewStatus, updatedAt])
@@ -195,6 +255,31 @@ model DealCandidate {
   @@index([observedAt])
 }
 
+
+model LegacyDealReviewState {
+  candidateId  String           @id
+  reviewStatus DealReviewStatus
+  reviewedBy   String?
+  reviewedAt   DateTime?
+  archivedAt   DateTime         @default(now())
+}
+
+model DealReview {
+  id             String              @id @default(cuid())
+  tenantId       String
+  candidateId    String
+  reviewerUserId String
+  decision       TenantReviewDecision
+  reviewedAt     DateTime            @default(now())
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  candidate      DealCandidate       @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, candidateId])
+  @@index([tenantId, decision, reviewedAt])
+  @@index([reviewerUserId, reviewedAt])
+}
 
 enum TestnetKillSwitchScope {
   GLOBAL
@@ -309,4 +394,34 @@ model ReconciliationRun {
 
   @@index([providerId, accountId, startedAt])
   @@index([status, startedAt])
+}
+
+
+model JournalTransaction {
+  id          String         @id @default(cuid())
+  tenantId    String
+  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  referenceId String
+  currency    String         @db.VarChar(3)
+  description String
+  payloadHash String         @db.VarChar(64)
+  postedAt    DateTime?
+  createdAt   DateTime       @default(now())
+  entries     JournalEntry[]
+
+  @@unique([tenantId, referenceId])
+  @@index([tenantId, createdAt])
+}
+
+model JournalEntry {
+  id            String            @id @default(cuid())
+  transactionId String
+  transaction   JournalTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  accountCode   String            @db.VarChar(64)
+  debitCents    BigInt            @default(0)
+  creditCents   BigInt            @default(0)
+  createdAt     DateTime          @default(now())
+
+  @@index([transactionId])
+  @@index([accountCode, createdAt])
 }

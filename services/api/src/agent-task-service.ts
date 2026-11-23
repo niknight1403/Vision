@@ -21,6 +21,7 @@ export function taskRetryDelaySeconds(attempt: number, baseSeconds = 5): number 
 
 export type CreateTaskInput = {
   ownerId: string;
+  tenantId: string;
   taskType: string;
   input: JsonObject;
   idempotencyKey: string;
@@ -67,7 +68,7 @@ function matchIdempotentTask(
   existing: Prisma.AgentTaskGetPayload<object>, input: CreateTaskInput, inputHash: string, maxAttempts: number,
 ) {
   const existingHash = existing.inputHash ?? hashTaskInput(existing.input);
-  if (existing.ownerId !== input.ownerId || existing.taskType !== input.taskType ||
+  if (existing.ownerId !== input.ownerId || existing.tenantId !== input.tenantId || existing.taskType !== input.taskType ||
       existingHash !== inputHash || existing.maxAttempts !== maxAttempts) {
     throw new Error("TASK_IDEMPOTENCY_CONFLICT");
   }
@@ -81,7 +82,7 @@ async function emit(db: Db, eventType: string, taskId: string, correlationId: st
 }
 
 export async function createAgentTask(prisma: PrismaClient, input: CreateTaskInput) {
-  if (!input.ownerId.trim() || !input.taskType.trim() || !input.idempotencyKey.trim()) {
+  if (!input.ownerId.trim() || !input.tenantId.trim() || !input.taskType.trim() || !input.idempotencyKey.trim()) {
     throw new Error("TASK_REQUIRED_FIELDS_MISSING");
   }
   const maxAttempts = input.maxAttempts ?? 3;
@@ -94,11 +95,11 @@ export async function createAgentTask(prisma: PrismaClient, input: CreateTaskInp
 
   try {
     return await prisma.$transaction(async (tx) => {
-      const existing = await tx.agentTask.findUnique({ where: { idempotencyKey } });
+      const existing = await tx.agentTask.findUnique({ where: { tenantId_idempotencyKey: { tenantId: input.tenantId, idempotencyKey } } });
       if (existing) return matchIdempotentTask(existing, input, inputHash, maxAttempts);
       const task = await tx.agentTask.create({
         data: {
-          ownerId: input.ownerId, taskType: input.taskType, input: canonicalInput, inputHash,
+          ownerId: input.ownerId, tenantId: input.tenantId, taskType: input.taskType, input: canonicalInput, inputHash,
           idempotencyKey, correlationId: input.correlationId, maxAttempts,
         },
       });
@@ -109,7 +110,7 @@ export async function createAgentTask(prisma: PrismaClient, input: CreateTaskInp
     });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      const concurrent = await prisma.agentTask.findUnique({ where: { idempotencyKey } });
+      const concurrent = await prisma.agentTask.findUnique({ where: { tenantId_idempotencyKey: { tenantId: input.tenantId, idempotencyKey } } });
       if (concurrent) return matchIdempotentTask(concurrent, input, inputHash, maxAttempts);
     }
     throw error;
@@ -216,10 +217,11 @@ export async function failAgentTask(prisma: PrismaClient, taskId: string, worker
 }
 
 /** Cancellation is an internal privileged operation; expose it only behind server-side RBAC. */
-export async function cancelAgentTask(prisma: PrismaClient, taskId: string, ownerId: string) {
+export async function cancelAgentTask(prisma: PrismaClient, taskId: string, ownerId: string, tenantId: string) {
+  if (!ownerId.trim() || !tenantId.trim()) throw new Error("TASK_OWNER_REQUIRED");
   return prisma.$transaction(async (tx) => {
     const changed = await tx.agentTask.updateMany({
-      where: { id: taskId, ownerId, status: { in: ["QUEUED", "CHECKPOINTED"] } },
+      where: { id: taskId, ownerId, tenantId, status: { in: ["QUEUED", "CHECKPOINTED"] } },
       data: { status: "CANCELLED", finishedAt: new Date(), lockedBy: null, leaseUntil: null },
     });
     if (changed.count !== 1) throw new Error("TASK_NOT_CANCELLABLE");
