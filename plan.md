@@ -19,6 +19,25 @@ Vision-Inspection ist ein Analyse-/Audit-Signal und niemals ein Authentizitätsn
 9. **Release-Evidence** — Typecheck, Unit-Tests, Dependency-Audit, Python-Tests sowie Build-ID/SHA256-Nachweise; fehlende PostgreSQL-URL wird als skipped ausgewiesen.
 10. **Android-/Release-Gate und Abschluss** — tatsächlichen read-only-Status, Operations-/Task-Fehler und fehlende Gerätetests dokumentieren; Abschluss-Gate mit SHAs und Blockern.
 
+## Sprints 31–40 — abgeschlossen
+
+Die zweite Zehn-Sprint-Serie ist umgesetzt und committed; Nachweis: [docs/forty-sprint-release-gate.md](docs/forty-sprint-release-gate.md).
+
+1. **31 — Python-Testnachweis:** Download-Guards und `/v1/analyze`-Auth/Validierung getestet; `npm run test:python` läuft aus dem Repo-Root.
+2. **32 — PostgreSQL-Integration:** `test:db` führt die Suite wirklich aus; Idempotenz-Hashes kanonisch; lokales Cluster-Skript.
+3. **33 — Egress-Pinning:** validierte Adresse wird einmal aufgelöst und exakt dorthin verbunden; TLS/SNI bleibt intakt, keine Redirects.
+4. **34 — Vision-Worker-Härtung:** Payload-Limit, Analyse-Deadline, begrenzte Parallelität, Korrelation, redigierte Fehler, Liveness/Readiness getrennt.
+5. **35 — Rate-Limits:** Sliding Window mit `Retry-After`, harter Key-Deckel, fail-closed Konfiguration.
+6. **36 — Outbox-Betrieb:** Lease-Reaper, Statuszähler, begrenztes Dead-Letter-Replay mit additiver Migration.
+7. **37 — Observability:** Prometheus-`/metrics` hinter Token, Karten-/Serienlimits, Routen-Template-Labels, `x-request-id`.
+8. **38 — Backup/Restore:** Drill vergleicht Tabellen, Zeilen und Migrationen; Negativfall belegt, dass Abweichungen erkannt werden.
+9. **39 — Mobile-Client:** testbare API-Schicht mit typisierten Fehlern, Single-Flight-Refresh und Backoff-Polling; 43 Unit-Tests.
+10. **40 — Abschluss-Gate:** alle Checks real ausgeführt (Typecheck, 198 JS-Tests, 37 DB-Tests, 68 pytest, Audit, API-Build, Android-Hermes-Bundle, Restore-Drill) und Blocker dokumentiert.
+
+### Was danach weiterhin offen bleibt
+
+Geräte-/Emulator-Tests, E2E gegen eine laufende API, echte Marketplace-Mutationen und Provider-Credentials, PITR/Offsite-Backup, ein gateway-geteilter Rate-Limiter, Lasttests, Produktions-Deployment und unabhängige Abnahmen. `testnetEnabled`, `tradingReady`, `purchaseAuthorized` und `authenticityVerified` bleiben fail-closed bzw. `false`.
+
 ## Akzeptanzkriterien
 
 - Jeder Sprint hat kleine, nachvollziehbare Änderungen, passende Tests/Checks und einen erfolgreichen Commit; DB-Tests werden ohne `DATABASE_URL` als übersprungen ausgewiesen.

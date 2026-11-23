@@ -8,7 +8,31 @@
 - Vision-Inspection als Analysebefund; `purchaseAuthorized` und `authenticityVerified` bleiben immer `false`.
 - TESTNET-Sicherheitsprimitive und deaktivierter mutierender Adapter; LIVE bleibt gesperrt.
 
-## Zehn Sprint-Ziele
+## Sprints 31–40 — abgeschlossen (Gate: `docs/forty-sprint-release-gate.md`)
+
+Alle zehn Sprints sind committed; die SHAs und die real ausgeführten Checks stehen im Gate-Dokument.
+
+- [x] **31** — Python-Testnachweis für Download-Guards und `/v1/analyze` (`npm run test:python` reproduzierbar).
+- [x] **32** — PostgreSQL-Integrationssuite lauffähig, Idempotenz-Hash kanonisch, lokales Cluster-Skript.
+- [x] **33** — Egress-Pinning gegen DNS-Rebinding mit intaktem TLS/SNI, keine Redirects.
+- [x] **34** — Vision-Worker: 64-KiB-Limit, Deadline, begrenzte Parallelität, `x-request-id`, redigierte Fehler.
+- [x] **35** — Sliding-Window-Rate-Limits mit `Retry-After` und fail-closed Konfiguration.
+- [x] **36** — Outbox-Lease-Reaper, Statuszähler, begrenztes Dead-Letter-Replay.
+- [x] **37** — Prometheus-`/metrics` hinter Token, Kartenlimits, Request-Korrelation, Alert-Regeln.
+- [x] **38** — Backup-/Restore-Drill mit Tabellen-, Zeilen- und Migrationsvergleich plus Negativfall.
+- [x] **39** — Geräteunabhängige Mobile-API-Schicht mit typisierten Fehlern, Single-Flight-Refresh und Backoff-Polling.
+- [x] **40** — Abschluss-Gate: Typecheck, 198 JS-Tests, 37 DB-Tests, 68 pytest, Audit, Builds, Restore-Drill; Blocker dokumentiert.
+
+### Verbleibende Blocker nach Sprint 40
+
+- Keine Android-Geräte-/Emulator-Tests, kein `adb`/SDK/JDK in der Umgebung; nur Typecheck, Unit-Tests und Hermes-Bundle.
+- Kein E2E-Lauf Mobile → echte API über HTTP.
+- Keine Live-Marketplace-Mutation (kein Kauf, Listing, Settlement) und keine Provider-Credentials.
+- Kein PITR-/Offsite-Backup, kein Restore in ein echtes Staging/Produktion; der Drill lief gegen ein faktisch leeres Anwendungsschema.
+- In-Process-Rate-Limit statt Gateway/Redis; keine Last-/Soak-Tests, kein echter Prometheus-Scrape.
+- Kein Produktions-Deployment, keine Egress-Firewall-/NetworkPolicy-Evidenz, keine unabhängige Security-/Datenschutz-Abnahme.
+
+## Frühere Zehn-Sprint-Ziele (abgeschlossen, historisch)
 
 1. **Dokumente synchronisieren:** aktueller Scope, Akzeptanzkriterien und harte Live-Blocker sind in `plan.md` festgehalten.
 2. **Operations-Readiness:** geschützte read-only Übersicht für ADMIN/OPERATOR; Provider-, Queue-, Outbox-, Kill-Switch-, DB- und Konfigurationsstatus ohne Secrets; DB-Ausfall ist expliziter Fehler.
@@ -31,4 +55,4 @@
 
 ## Offene Nachweise
 
-Reale Provider-Auswahl, Credentials, PostgreSQL-Integration, Android-Installations-/Gerätetests, Migration-Runbook, Incident-Runbook und unabhängige Sicherheitsabnahme fehlen weiterhin. Demo- und Testdaten sind ausschließlich als solche gekennzeichnet.
+Reale Provider-Auswahl, Credentials, Android-Installations-/Gerätetests, Incident-Runbook-Drill, PITR/Offsite-Backup, Lasttests und unabhängige Sicherheitsabnahme fehlen weiterhin. PostgreSQL-Integration ist lokal nachgewiesen (37 Tests), aber nicht in einem Produktions-Cluster. Demo- und Testdaten sind ausschließlich als solche gekennzeichnet.

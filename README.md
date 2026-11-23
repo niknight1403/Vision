@@ -94,7 +94,24 @@ npm run typecheck && npm test
 8. Publish build IDs, artifact hashes, migration status, and health-check evidence before calling a release production-ready.
 
 See [docs/architecture.md](docs/architecture.md) and [docs/release-gates.md](docs/release-gates.md).
-The evidence for Sprints 21–30 is recorded in [docs/thirty-sprint-release-gate.md](docs/thirty-sprint-release-gate.md); it is a source/test gate, not a production approval.
+The evidence for Sprints 21–30 is recorded in [docs/thirty-sprint-release-gate.md](docs/thirty-sprint-release-gate.md) and for Sprints 31–40 in [docs/forty-sprint-release-gate.md](docs/forty-sprint-release-gate.md). Both are source/test gates, not production approvals.
+
+## Verified checks (Sprints 31–40)
+
+All commands below were actually executed on 2026-11-23 against the local repository; the numbers are the observed output, not targets:
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` | green (mobile, api, trading-core) |
+| `npm test` | green — 198 tests in 32 files (mobile 43, api 112, trading-core 43) |
+| `npm run test:db --workspace @autonomagent/api` | green — 37 tests in 7 files, 0 skipped (33 integration tests in 6 files) against local PostgreSQL |
+| `npm run test:python` | green — 68 passed, 0 skipped |
+| `npm run audit:gate` | green — 0 advisories |
+| `npm run build --workspace @autonomagent/api` | green — TypeScript build emitted |
+| `npx expo export --platform android` | green — Hermes bundle, 603 modules |
+| `node scripts/backup-restore-drill.mjs` | PASSED — 14 tables, 9 migrations, dump 39 540 bytes |
+
+Still unproven: no device/emulator run, no end-to-end test against a running API, no live marketplace mutation, no provider credentials, no PITR/offsite backup, no gateway-shared rate limit, no load tests and no production deployment. See the blocker list in the gate document.
 
 ## License
 
