@@ -116,6 +116,60 @@ export async function createAgentTask(prisma: PrismaClient, input: CreateTaskInp
   }
 }
 
+/**
+ * Atomically claim the oldest eligible task of one type. PostgreSQL holds the
+ * candidate row lock only for this transaction; concurrent workers skip it and
+ * can claim another task. The started event is committed with the lease update.
+ */
+export async function claimNextAgentTask(
+  prisma: PrismaClient,
+  taskType: string,
+  workerId: string,
+  leaseSeconds = 90,
+) {
+  if (!taskType.trim()) throw new Error("TASK_TYPE_REQUIRED");
+  if (!workerId.trim()) throw new Error("WORKER_ID_REQUIRED");
+  if (!Number.isInteger(leaseSeconds) || leaseSeconds < 5 || leaseSeconds > 3600) {
+    throw new Error("INVALID_LEASE_SECONDS");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const claimed = await tx.$queryRaw<Prisma.AgentTaskGetPayload<object>[]>(Prisma.sql`
+      WITH candidate AS (
+        SELECT id
+        FROM "AgentTask"
+        WHERE "taskType" = ${taskType}
+          AND status = 'QUEUED'
+          AND "availableAt" <= NOW()
+          AND attempt < "maxAttempts"
+        ORDER BY "availableAt" ASC, "createdAt" ASC, id ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+      )
+      UPDATE "AgentTask" AS task
+      SET status = 'RUNNING',
+          attempt = task.attempt + 1,
+          "lockedBy" = ${workerId},
+          "leaseUntil" = NOW() + (${leaseSeconds} * INTERVAL '1 second'),
+          "startedAt" = COALESCE(task."startedAt", NOW()),
+          "lastError" = NULL,
+          "updatedAt" = NOW()
+      FROM candidate
+      WHERE task.id = candidate.id
+      RETURNING task.*
+    `);
+    const task = claimed[0];
+    if (!task) return null;
+
+    await emit(tx, "agent.task.started", task.id, task.correlationId ?? undefined, {
+      taskId: task.id,
+      workerId,
+      attempt: task.attempt,
+    });
+    return task;
+  });
+}
+
 /** Compare-and-set claim. A crashed worker's expired lease can be reclaimed. */
 export async function claimAgentTask(prisma: PrismaClient, taskId: string, workerId: string, leaseSeconds = 90) {
   if (!workerId.trim()) throw new Error("WORKER_ID_REQUIRED");

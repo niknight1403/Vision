@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import {
-  claimAgentTask, createAgentTask, failAgentTask, hashTaskInput, PermanentTaskError, recoverExpiredAgentTasks,
+  claimAgentTask, claimNextAgentTask, createAgentTask, failAgentTask, hashTaskInput, PermanentTaskError, recoverExpiredAgentTasks,
 } from "./agent-task-service.js";
 
 const databaseEnabled = Boolean(process.env.DATABASE_URL);
@@ -36,6 +36,44 @@ suite("agent task retries (PostgreSQL)", () => {
     taskIds.push(task.id);
     return task;
   }
+
+  it("skips a queued task locked by another transaction", async () => {
+    const first = await createTask();
+    const second = await createTask();
+
+    let signalLocked!: () => void;
+    let releaseLock!: () => void;
+    const lockAcquired = new Promise<void>((resolve) => { signalLocked = resolve; });
+    const holdLock = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const lockTransaction = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM "AgentTask" WHERE id = ${first.id} FOR UPDATE`);
+      signalLocked();
+      await holdLock;
+    });
+
+    await lockAcquired;
+    let claim;
+    try {
+      claim = await claimNextAgentTask(prisma, "test", "skip-locked-worker", 30);
+    } finally {
+      releaseLock();
+      await lockTransaction;
+    }
+
+    expect(claim?.id).toBe(second.id);
+    expect(claim?.attempt).toBe(1);
+    expect(claim?.status).toBe("RUNNING");
+    expect(claim?.leaseUntil?.getTime()).toBeGreaterThan(Date.now());
+
+    const afterUnlock = await claimNextAgentTask(prisma, "test", "unlocked-worker", 30);
+    expect(afterUnlock?.id).toBe(first.id);
+    expect(afterUnlock?.attempt).toBe(1);
+    const startedEvents = await prisma.outboxEvent.findMany({
+      where: { aggregateId: { in: [first.id, second.id] }, eventType: "agent.task.started" },
+      select: { aggregateId: true },
+    });
+    expect(startedEvents.map((event) => event.aggregateId).sort()).toEqual([first.id, second.id].sort());
+  });
 
   it("requeues a retryable failure with backoff and refuses an early claim", async () => {
     const task = await createTask(3);
