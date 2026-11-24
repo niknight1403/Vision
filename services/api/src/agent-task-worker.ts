@@ -12,6 +12,11 @@ if (!endpoint || !token || token.length < 32) throw new Error("VISION_WORKER_URL
 if (!Number.isInteger(pollMs) || pollMs < 250 || pollMs > 30000) throw new Error("AGENT_WORKER_POLL_INTERVAL_MS must be between 250 and 30000");
 if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error("INVALID_AGENT_WORKER_CONCURRENCY");
 const analysisUrl = new URL("/v1/analyze", endpoint);
+const fallbackEndpoint = process.env.VISION_FREE_FALLBACK_URL;
+const fallbackToken = process.env.VISION_FREE_FALLBACK_TOKEN;
+if (Boolean(fallbackEndpoint) !== Boolean(fallbackToken)) throw new Error("INCOMPLETE_VISION_FALLBACK_CONFIG");
+const fallbackUrl = fallbackEndpoint ? new URL("/v1/analyze", fallbackEndpoint) : undefined;
+if (fallbackUrl && (fallbackUrl.protocol !== "https:" || fallbackUrl.username || fallbackUrl.password || !fallbackToken || fallbackToken.length < 32)) throw new Error("INVALID_VISION_FALLBACK_CONFIG");
 const prisma = new PrismaClient();
 const shutdown = new AbortController();
 process.once("SIGINT", () => shutdown.abort());
@@ -29,17 +34,30 @@ const analyze: TaskHandler = async (task, context) => {
   const input = task.input as Record<string, unknown>;
   const purchasePrice = safeMinor(input.purchasePriceMinor, "PURCHASE_PRICE");
   const totalCost = safeMinor(input.totalCostCents, "TOTAL_COST");
-  const response = await fetch(analysisUrl, {
+  const request = (url: URL, credential: string) => fetch(url, {
     method: "POST",
-    headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+    headers: { authorization: "Bearer " + credential, "content-type": "application/json" },
     body: JSON.stringify({
       candidate_id: String(input.dealId ?? ""), title: String(input.title ?? ""),
       description: "", image_url: String(input.imageUrl ?? ""),
       asking_price_minor: purchasePrice, known_costs_minor: Math.max(0, totalCost - purchasePrice),
       currency: String(input.currency ?? "EUR"),
     }),
-    signal: AbortSignal.any([context.signal, shutdown.signal, AbortSignal.timeout(90_000)]),
+    signal: AbortSignal.any([context.signal, shutdown.signal, AbortSignal.timeout(fallbackUrl ? 40_000 : 90_000)]),
   });
+  let response: Response;
+  try {
+    response = await request(analysisUrl, token!);
+  } catch (error) {
+    if (!fallbackUrl || !fallbackToken || context.signal.aborted || shutdown.signal.aborted) throw error;
+    response = await request(fallbackUrl, fallbackToken);
+    if (!response.ok) throw new Error("VISION_WORKER_HTTP_" + response.status);
+    return canonicalizeTaskInput(await response.json());
+  }
+  if (fallbackUrl && fallbackToken && (response.status === 429 || response.status >= 500)) {
+    await response.body?.cancel();
+    response = await request(fallbackUrl, fallbackToken);
+  }
   if (!response.ok) throw new Error("VISION_WORKER_HTTP_" + response.status);
   return canonicalizeTaskInput(await response.json());
 };
