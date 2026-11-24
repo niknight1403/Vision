@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { canonicalizeTaskInput, PermanentTaskError } from "./agent-task-service.js";
 import { runAgentOrchestrator, type TaskHandler } from "./agent-orchestrator.js";
+import { FreeRouteRouter, RouteFailure } from "./providers/free-route-router.js";
 
 const workerId = process.env.AGENT_WORKER_ID ?? "treasure-worker-" + randomUUID();
 const endpoint = process.env.VISION_WORKER_URL;
@@ -14,9 +15,11 @@ if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw 
 const analysisUrl = new URL("/v1/analyze", endpoint);
 const fallbackEndpoint = process.env.VISION_FREE_FALLBACK_URL;
 const fallbackToken = process.env.VISION_FREE_FALLBACK_TOKEN;
+if (fallbackEndpoint && process.env.VISION_ROUTES_ZERO_COST_CONFIRMED !== "true") throw new Error("VISION_ROUTE_COST_UNCONFIRMED");
 if (Boolean(fallbackEndpoint) !== Boolean(fallbackToken)) throw new Error("INCOMPLETE_VISION_FALLBACK_CONFIG");
 const fallbackUrl = fallbackEndpoint ? new URL("/v1/analyze", fallbackEndpoint) : undefined;
 if (fallbackUrl && (fallbackUrl.protocol !== "https:" || fallbackUrl.username || fallbackUrl.password || !fallbackToken || fallbackToken.length < 32)) throw new Error("INVALID_VISION_FALLBACK_CONFIG");
+const router = new FreeRouteRouter();
 const prisma = new PrismaClient();
 const shutdown = new AbortController();
 process.once("SIGINT", () => shutdown.abort());
@@ -34,7 +37,7 @@ const analyze: TaskHandler = async (task, context) => {
   const input = task.input as Record<string, unknown>;
   const purchasePrice = safeMinor(input.purchasePriceMinor, "PURCHASE_PRICE");
   const totalCost = safeMinor(input.totalCostCents, "TOTAL_COST");
-  const request = (url: URL, credential: string) => fetch(url, {
+  const request = (url: URL, credential: string, signal: AbortSignal) => fetch(url, {
     method: "POST",
     headers: { authorization: "Bearer " + credential, "content-type": "application/json" },
     body: JSON.stringify({
@@ -43,23 +46,25 @@ const analyze: TaskHandler = async (task, context) => {
       asking_price_minor: purchasePrice, known_costs_minor: Math.max(0, totalCost - purchasePrice),
       currency: String(input.currency ?? "EUR"),
     }),
-    signal: AbortSignal.any([context.signal, shutdown.signal, AbortSignal.timeout(fallbackUrl ? 40_000 : 90_000)]),
+    signal, redirect: "error",
   });
-  let response: Response;
-  try {
-    response = await request(analysisUrl, token!);
-  } catch (error) {
-    if (!fallbackUrl || !fallbackToken || context.signal.aborted || shutdown.signal.aborted) throw error;
-    response = await request(fallbackUrl, fallbackToken);
-    if (!response.ok) throw new Error("VISION_WORKER_HTTP_" + response.status);
+  const signal = AbortSignal.any([context.signal, shutdown.signal]);
+  const invoke = async (url: URL, credential: string, attemptSignal: AbortSignal) => {
+    const response = await request(url, credential, attemptSignal);
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new RouteFailure(response.status === 429 || response.status >= 500);
+    }
     return canonicalizeTaskInput(await response.json());
+  };
+  if (!fallbackUrl || !fallbackToken) {
+    return invoke(analysisUrl, token!, AbortSignal.any([signal, AbortSignal.timeout(90_000)]));
   }
-  if (fallbackUrl && fallbackToken && (response.status === 429 || response.status >= 500)) {
-    await response.body?.cancel();
-    response = await request(fallbackUrl, fallbackToken);
-  }
-  if (!response.ok) throw new Error("VISION_WORKER_HTTP_" + response.status);
-  return canonicalizeTaskInput(await response.json());
+  const result = await router.execute([
+    { id: "primary-vision", cost: "FREE", execute: (s) => invoke(analysisUrl, token!, s) },
+    { id: "fallback-vision", cost: "FREE", execute: (s) => invoke(fallbackUrl, fallbackToken, s) },
+  ], signal);
+  return result.value;
 };
 
 async function main() {
