@@ -135,6 +135,8 @@ export function pollTaskStatus(options: PollTaskOptions): PollHandle {
         task = await options.client.getTreasureAnalysis(options.taskId, {
           signal: controller.signal,
         });
+        if (controller.signal.aborted) return stoppedSnapshot();
+        rateLimitWaits = 0;
         lastTask = task;
         if (task.status === "SUCCEEDED") {
           return finish({ state: "success", taskId: options.taskId, attempt, polls, task });
@@ -209,6 +211,7 @@ export function pollTaskStatus(options: PollTaskOptions): PollHandle {
           });
         }
 
+        rateLimitWaits = 0;
         state = error instanceof ServerError ? "error" : "offline";
         if (attempt >= maxAttempts) {
           return finish({

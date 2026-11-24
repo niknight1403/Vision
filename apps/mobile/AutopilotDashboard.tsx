@@ -140,6 +140,26 @@ export default function AutopilotDashboard() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [signedIn, setSignedIn] = useState(false);
+  const [backendStatus, setBackendStatus] = useState<"checking" | "reachable" | "unavailable">("checking");
+  useEffect(() => {
+    if (!client || !signedIn) return;
+    const controller = new AbortController();
+    let running = false;
+    const check = async () => {
+      if (running || controller.signal.aborted) return;
+      running = true;
+      try {
+        await client.getOperationsOverview({ signal: controller.signal });
+        if (!controller.signal.aborted) setBackendStatus("reachable");
+      } catch {
+        if (!controller.signal.aborted) setBackendStatus("unavailable");
+      } finally { running = false; }
+    };
+    setBackendStatus("checking");
+    void check();
+    const timer = setInterval(() => void check(), 30000);
+    return () => { clearInterval(timer); controller.abort(); };
+  }, [client, signedIn]);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [tasks, setTasks] = useState<Record<string, TreasureAnalysisTask>>({});
@@ -158,6 +178,7 @@ export default function AutopilotDashboard() {
     client?.session.clear();
     setSignedIn(false);
     setDeals([]);
+    setImageUrls({});
     setTasks({});
     setPollStates({});
     setPassword("");
@@ -241,6 +262,7 @@ export default function AutopilotDashboard() {
         client,
         taskId: task.taskId,
         onSnapshot: (snapshot: PollSnapshot) => {
+          if (!pollersRef.current.has(task.taskId)) return;
           setPollStates((current) => ({ ...current, [dealId]: snapshot.state }));
           const next = snapshot.task;
           if (next) {
@@ -252,6 +274,7 @@ export default function AutopilotDashboard() {
       });
       pollersRef.current.set(task.taskId, handle);
       void handle.promise.then((final) => {
+        if (pollersRef.current.get(task.taskId) !== handle) return;
         pollersRef.current.delete(task.taskId);
         finishedRef.current.add(task.taskId);
         setPollStates((current) => ({ ...current, [dealId]: final.state }));
@@ -269,8 +292,8 @@ export default function AutopilotDashboard() {
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar style="light" />
-      <ScrollView contentContainerStyle={styles.container}>
-        <View style={styles.commandBar}><Text style={styles.eyebrow}>VISION / ORBIT</Text><Text style={styles.commandStatus}>● SYSTEM AKTIV</Text></View>
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        <View style={styles.commandBar}><Text style={styles.eyebrow}>VISION / ORBIT</Text><Text style={[styles.commandStatus, (!signedIn || backendStatus !== "reachable") && styles.warning]}>{signedIn ? (backendStatus === "reachable" ? "● API ERREICHBAR" : backendStatus === "checking" ? "○ API-PRÜFUNG" : "○ STATUS NICHT VERFÜGBAR") : client ? "○ NICHT VERBUNDEN" : "○ API NICHT KONFIGURIERT"}</Text></View>
         <View style={styles.hero}><Text style={styles.heroBadge}>VISION SWARM · 6 SPEZIALISTEN</Text><Text style={styles.heading}>Finde das\nBesondere.</Text><Text style={styles.intro}>Dein Agententeam prüft Modellhinweise, Sammlerwert, Ersatzteile, Restaurierung und Risiken.</Text></View>
         <View style={styles.safetyBanner}>
           <Text style={styles.safetyTitle}>◈ DATENSTATUS · PROVIDER</Text>
@@ -280,8 +303,8 @@ export default function AutopilotDashboard() {
         {!signedIn ? (
           <Panel>
             <Text style={styles.panelTitle}>Kontrollzentrum öffnen</Text><Text style={styles.bodyText}>Melde dich an, um Produktkandidaten und laufende Analysen zu sehen.</Text>
-            <TextInput value={email} onChangeText={setEmail} placeholder="E-Mail" placeholderTextColor="#7183A3" autoCapitalize="none" keyboardType="email-address" style={styles.input} />
-            <TextInput value={password} onChangeText={setPassword} placeholder="Passwort" placeholderTextColor="#7183A3" secureTextEntry style={styles.input} />
+            <TextInput value={email} onChangeText={setEmail} accessibilityLabel="E-Mail" placeholder="E-Mail" placeholderTextColor="#7183A3" autoCapitalize="none" keyboardType="email-address" style={styles.input} />
+            <TextInput value={password} onChangeText={setPassword} accessibilityLabel="Passwort" placeholder="Passwort" placeholderTextColor="#7183A3" secureTextEntry style={styles.input} />
             <ActionButton title={busy ? "Anmeldung läuft …" : "Sicher anmelden"} onPress={() => void signIn()} disabled={busy} />
             <Text style={styles.muted}>Zugangsdaten werden nur für den Login übertragen und nicht lokal gespeichert.</Text>
           </Panel>
@@ -301,9 +324,9 @@ export default function AutopilotDashboard() {
                   <Text style={styles.bodyText}>Gesamtkosten: {money(Number(deal.totalCostCents), deal.currency)}</Text>
                   <Text style={styles.muted}>{deal.riskPassed ? "Regelprüfung bestanden" : "Risiko-Prüfung offen"} · {deal.riskReasons.join(", ")}</Text>
                   <TextInput value={imageUrls[deal.id] ?? ""} onChangeText={(value) => setImageUrls((current) => ({ ...current, [deal.id]: value }))}
-                    placeholder="HTTPS-Bildadresse des Produkts" placeholderTextColor="#7183A3" autoCapitalize="none" style={styles.input} />
+                    accessibilityLabel="HTTPS-Bildadresse des Produkts" placeholder="HTTPS-Bildadresse des Produkts" placeholderTextColor="#7183A3" autoCapitalize="none" style={styles.input} />
                   <ActionButton title={busy ? "Bitte warten …" : "6 Spezialisten analysieren lassen"}
-                    onPress={() => void startAnalysis(deal)} disabled={busy || !deal.id} />
+                    onPress={() => void startAnalysis(deal)} disabled={busy || !deal.id || (tasks[deal.id] ? isPollableTaskStatus(tasks[deal.id]!.status) : false)} />
                   {tasks[deal.id] && (
                     <TaskResult
                       task={tasks[deal.id]!}

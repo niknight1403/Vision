@@ -14,6 +14,7 @@ export type RefreshFunction = (refreshToken: string) => Promise<AuthTokenPair>;
 
 export class SessionStore {
   private tokens: AuthTokenPair | null = null;
+  private generation = 0;
   private pending: Promise<AuthTokenPair> | null = null;
   private readonly refreshFn: RefreshFunction;
 
@@ -41,10 +42,13 @@ export class SessionStore {
     if (!tokens || typeof tokens.accessToken !== "string" || !tokens.accessToken) {
       throw new SessionExpiredError({ code: "TOKEN_RESPONSE_INVALID" });
     }
+    this.generation += 1;
+    this.pending = null;
     this.tokens = tokens;
   }
 
   clear(): void {
+    this.generation += 1;
     this.tokens = null;
     this.pending = null;
   }
@@ -54,15 +58,20 @@ export class SessionStore {
     if (this.pending) return this.pending;
     const current = this.tokens?.refreshToken;
     if (!current) return Promise.reject(new SessionExpiredError());
-    const pending = (async () => {
+    const generation = this.generation;
+    const pending = Promise.resolve().then(async () => {
       try {
         const next = await this.refreshFn(current);
+        if (generation !== this.generation) throw new SessionExpiredError();
+        if (!next || typeof next.accessToken !== "string" || !next.accessToken) {
+          throw new SessionExpiredError({ code: "TOKEN_RESPONSE_INVALID" });
+        }
         this.tokens = next;
         return next;
       } finally {
-        this.pending = null;
+        if (generation === this.generation) this.pending = null;
       }
-    })();
+    });
     this.pending = pending;
     return pending;
   }

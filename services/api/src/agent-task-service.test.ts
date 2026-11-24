@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { canonicalizeTaskInput, hashTaskInput } from "./agent-task-service.js";
+import type { PrismaClient } from "@prisma/client";
+import { claimAgentTask, canonicalizeTaskInput, hashTaskInput } from "./agent-task-service.js";
 
 describe("agent task lifecycle contract", () => {
   it("documents terminal and resumable states", () => {
@@ -42,5 +43,35 @@ describe("canonical task input hashing", () => {
 
   it("rejects non-object input", () => {
     expect(() => hashTaskInput(["a"])).toThrow("TASK_INPUT_MUST_BE_OBJECT");
+  });
+});
+
+
+describe("expired lease takeover fencing", () => {
+  it("requires the previously observed lease to remain expired at the atomic update", async () => {
+    const now = Date.now();
+    const originalOwner = "original-worker";
+    const tx = {
+      agentTask: {
+        findUnique: async () => ({
+          id: "t1", status: "RUNNING", attempt: 1, maxAttempts: 3,
+          lockedBy: originalOwner,
+          leaseUntil: new Date(now - 10_000),
+          availableAt: new Date(now - 20_000),
+        }),
+        updateMany: async ({ where }: { where: Record<string, unknown> }) => {
+          expect(where.lockedBy).toBe(originalOwner);
+          expect(where.leaseUntil).toEqual({ lt: expect.any(Date) });
+          // The heartbeat renewed the lease after findUnique: the conditional
+          // update must lose instead of taking over the still-running task.
+          return { count: 0 };
+        },
+      },
+    };
+    const prisma = {
+      $transaction: async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx),
+    } as unknown as PrismaClient;
+    await expect(claimAgentTask(prisma, "t1", "new-worker", 90))
+      .rejects.toThrow("TASK_CLAIM_CONFLICT");
   });
 });

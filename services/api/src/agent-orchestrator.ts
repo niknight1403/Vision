@@ -56,10 +56,11 @@ export async function heartbeatTaskLease(
   return leaseUntil;
 }
 
-export async function listClaimableTaskIds(prisma: PrismaClient, limit = 20): Promise<string[]> {
+export async function listClaimableTaskIds(prisma: PrismaClient, limit = 20, taskTypes?: string[]): Promise<string[]> {
   const tasks = await prisma.agentTask.findMany({
     where: {
       attempt: { lt: 20 },
+      ...(taskTypes ? { taskType: { in: taskTypes } } : {}),
       OR: [
         { status: "QUEUED", availableAt: { lte: new Date() } },
         { status: "CHECKPOINTED" },
@@ -84,7 +85,7 @@ async function executeTask(
   } catch {
     return false; // another worker won the claim or task became ineligible
   }
-  const handler = handlers[task.taskType];
+  const handler = Object.prototype.hasOwnProperty.call(handlers, task.taskType) ? handlers[task.taskType] : undefined;
   if (!handler) {
     await failAgentTask(prisma, taskId, workerId, new PermanentTaskError("NO_HANDLER_REGISTERED"));
     return true;
@@ -128,24 +129,37 @@ export async function runAgentOrchestrator(
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32) throw new Error("INVALID_CONCURRENCY");
   if (!Number.isInteger(pollMs) || pollMs < 100 || pollMs > 60_000) throw new Error("INVALID_POLL_INTERVAL");
 
+  const leaseSeconds = options.leaseSeconds ?? 90;
+  const heartbeatMs = options.heartbeatIntervalMs ?? 25_000;
+  if (!Number.isInteger(leaseSeconds) || leaseSeconds < 5 || leaseSeconds > 3600) throw new Error("INVALID_LEASE_SECONDS");
+  if (!Number.isInteger(heartbeatMs) || heartbeatMs < 100 || heartbeatMs >= leaseSeconds * 1000) throw new Error("INVALID_HEARTBEAT_INTERVAL");
+  if (Object.keys(handlers).length === 0) throw new Error("NO_HANDLERS_REGISTERED");
+  const internalStop = new AbortController();
+  const loopSignal = AbortSignal.any([signal, internalStop.signal]);
   const loops = Array.from({ length: concurrency }, async (_, index) => {
     const workerName = options.workerId + "-" + index;
-    while (!signal.aborted) {
+    while (!loopSignal.aborted) {
       await recoverExpiredAgentTasks(prisma);
-      if (signal.aborted) break;
-      const ids = await listClaimableTaskIds(prisma, concurrency * 2);
+      if (loopSignal.aborted) break;
+      const ids = await listClaimableTaskIds(prisma, concurrency * 2, Object.keys(handlers));
       let didWork = false;
       for (const id of ids) {
-        if (signal.aborted) break;
+        if (loopSignal.aborted) break;
         if (await executeTask(prisma, id, workerName, options, handlers)) {
           didWork = true;
           break;
         }
       }
       if (!didWork) {
-        await waitForPoll(signal, pollMs);
+        await waitForPoll(loopSignal, pollMs);
       }
     }
   });
-  await Promise.all(loops);
+  try {
+    await Promise.all(loops);
+  } catch (error) {
+    internalStop.abort();
+    await Promise.allSettled(loops);
+    throw error;
+  }
 }

@@ -357,7 +357,16 @@ export class ApiClient {
       }
 
       if (timedOut) throw new TimeoutError();
-      const rawBody = await this.readBody(response);
+      let rawBody: string;
+      try {
+        rawBody = await response.text();
+      } catch (error) {
+        if (timedOut) throw new TimeoutError({ cause: error });
+        if (externalAborted || isAbortLike(error)) throw new AbortedError({ cause: error });
+        throw new NetworkError({ cause: error });
+      }
+      if (timedOut) throw new TimeoutError();
+      if (externalAborted) throw new AbortedError();
       if (!response.ok) throw this.errorFromResponse(response, rawBody);
       if (response.status === 204 || rawBody === "") return undefined as T;
       try {
@@ -368,14 +377,6 @@ export class ApiClient {
     } finally {
       this.scheduler.clearTimeout(timer);
       options.signal?.removeEventListener("abort", onExternalAbort);
-    }
-  }
-
-  private async readBody(response: HttpResponseLike): Promise<string> {
-    try {
-      return await response.text();
-    } catch {
-      return "";
     }
   }
 
