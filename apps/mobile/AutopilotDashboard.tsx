@@ -262,6 +262,7 @@ export default function AutopilotDashboard() {
         client,
         taskId: task.taskId,
         onSnapshot: (snapshot: PollSnapshot) => {
+          if (!pollersRef.current.has(task.taskId)) return;
           setPollStates((current) => ({ ...current, [dealId]: snapshot.state }));
           const next = snapshot.task;
           if (next) {
@@ -273,6 +274,7 @@ export default function AutopilotDashboard() {
       });
       pollersRef.current.set(task.taskId, handle);
       void handle.promise.then((final) => {
+        if (pollersRef.current.get(task.taskId) !== handle) return;
         pollersRef.current.delete(task.taskId);
         finishedRef.current.add(task.taskId);
         setPollStates((current) => ({ ...current, [dealId]: final.state }));
@@ -291,7 +293,7 @@ export default function AutopilotDashboard() {
     <SafeAreaView style={styles.safe}>
       <StatusBar style="light" />
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-        <View style={styles.commandBar}><Text style={styles.eyebrow}>VISION / ORBIT</Text><Text style={styles.commandStatus}>{signedIn ? (backendStatus === "reachable" ? "● API ERREICHBAR" : backendStatus === "checking" ? "○ API-PRÜFUNG" : "○ STATUS NICHT VERFÜGBAR") : client ? "○ NICHT VERBUNDEN" : "○ API NICHT KONFIGURIERT"}</Text></View>
+        <View style={styles.commandBar}><Text style={styles.eyebrow}>VISION / ORBIT</Text><Text style={[styles.commandStatus, (!signedIn || backendStatus !== "reachable") && styles.warning]}>{signedIn ? (backendStatus === "reachable" ? "● API ERREICHBAR" : backendStatus === "checking" ? "○ API-PRÜFUNG" : "○ STATUS NICHT VERFÜGBAR") : client ? "○ NICHT VERBUNDEN" : "○ API NICHT KONFIGURIERT"}</Text></View>
         <View style={styles.hero}><Text style={styles.heroBadge}>VISION SWARM · 6 SPEZIALISTEN</Text><Text style={styles.heading}>Finde das\nBesondere.</Text><Text style={styles.intro}>Dein Agententeam prüft Modellhinweise, Sammlerwert, Ersatzteile, Restaurierung und Risiken.</Text></View>
         <View style={styles.safetyBanner}>
           <Text style={styles.safetyTitle}>◈ DATENSTATUS · PROVIDER</Text>
