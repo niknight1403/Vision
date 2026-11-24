@@ -25,10 +25,11 @@ async function execute(task: NonNullable<Awaited<ReturnType<typeof claimTask>>>)
   const input = task.input as Record<string, unknown>; let leaseLost = false;
   const leaseOwner = task.lockedBy;
   if (!leaseOwner) throw new Error("TASK_LEASE_OWNER_MISSING");
-  const timer = setInterval(() => void heartbeatTaskLease(prisma, task.id, leaseOwner, leaseSeconds).catch(() => { leaseLost = true; }), 25_000);
+  const controller = new AbortController();
+  const timer = setInterval(() => void heartbeatTaskLease(prisma, task.id, leaseOwner, leaseSeconds).catch(() => { leaseLost = true; controller.abort(); }), 25_000);
   try {
     const purchasePrice = safeMinor(input.purchasePriceMinor, "PURCHASE_PRICE"); const totalCost = safeMinor(input.totalCostCents, "TOTAL_COST");
-    const response = await fetch(new URL("/v1/analyze", endpoint), { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify({ candidate_id: String(input.dealId ?? ""), title: String(input.title ?? ""), description: "", image_url: String(input.imageUrl ?? ""), asking_price_minor: purchasePrice, known_costs_minor: Math.max(0, totalCost - purchasePrice), currency: String(input.currency ?? "EUR") }), signal: AbortSignal.timeout(90_000) });
+    const response = await fetch(new URL("/v1/analyze", endpoint), { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify({ candidate_id: String(input.dealId ?? ""), title: String(input.title ?? ""), description: "", image_url: String(input.imageUrl ?? ""), asking_price_minor: purchasePrice, known_costs_minor: Math.max(0, totalCost - purchasePrice), currency: String(input.currency ?? "EUR") }), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(90_000)]) });
     if (!response.ok) throw new Error("VISION_WORKER_HTTP_" + response.status);
     const result = await response.json() as Prisma.InputJsonObject; if (leaseLost) throw new Error("TASK_LEASE_LOST");
     await completeAgentTask(prisma, task.id, leaseOwner, result);
