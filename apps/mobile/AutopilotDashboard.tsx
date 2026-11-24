@@ -140,6 +140,26 @@ export default function AutopilotDashboard() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [signedIn, setSignedIn] = useState(false);
+  const [backendStatus, setBackendStatus] = useState<"checking" | "reachable" | "unavailable">("checking");
+  useEffect(() => {
+    if (!client || !signedIn) return;
+    const controller = new AbortController();
+    let running = false;
+    const check = async () => {
+      if (running || controller.signal.aborted) return;
+      running = true;
+      try {
+        await client.getOperationsOverview({ signal: controller.signal });
+        if (!controller.signal.aborted) setBackendStatus("reachable");
+      } catch {
+        if (!controller.signal.aborted) setBackendStatus("unavailable");
+      } finally { running = false; }
+    };
+    setBackendStatus("checking");
+    void check();
+    const timer = setInterval(() => void check(), 30000);
+    return () => { clearInterval(timer); controller.abort(); };
+  }, [client, signedIn]);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [tasks, setTasks] = useState<Record<string, TreasureAnalysisTask>>({});
@@ -271,7 +291,7 @@ export default function AutopilotDashboard() {
     <SafeAreaView style={styles.safe}>
       <StatusBar style="light" />
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-        <View style={styles.commandBar}><Text style={styles.eyebrow}>VISION / ORBIT</Text><Text style={styles.commandStatus}>{signedIn ? "● ANGEMELDET" : client ? "○ NICHT VERBUNDEN" : "○ API NICHT KONFIGURIERT"}</Text></View>
+        <View style={styles.commandBar}><Text style={styles.eyebrow}>VISION / ORBIT</Text><Text style={styles.commandStatus}>{signedIn ? (backendStatus === "reachable" ? "● API ERREICHBAR" : backendStatus === "checking" ? "○ API-PRÜFUNG" : "○ STATUS NICHT VERFÜGBAR") : client ? "○ NICHT VERBUNDEN" : "○ API NICHT KONFIGURIERT"}</Text></View>
         <View style={styles.hero}><Text style={styles.heroBadge}>VISION SWARM · 6 SPEZIALISTEN</Text><Text style={styles.heading}>Finde das\nBesondere.</Text><Text style={styles.intro}>Dein Agententeam prüft Modellhinweise, Sammlerwert, Ersatzteile, Restaurierung und Risiken.</Text></View>
         <View style={styles.safetyBanner}>
           <Text style={styles.safetyTitle}>◈ DATENSTATUS · PROVIDER</Text>
