@@ -190,6 +190,7 @@ export async function claimAgentTask(prisma: PrismaClient, taskId: string, worke
         status: task.status,
         attempt: task.attempt,
         ...(task.status === "QUEUED" ? { availableAt: { lte: now } } : {}),
+        ...(task.status === "RUNNING" ? { leaseUntil: { lt: now }, lockedBy: task.lockedBy } : {}),
       },
       data: {
         status: "RUNNING", attempt: { increment: 1 }, lockedBy: workerId,
