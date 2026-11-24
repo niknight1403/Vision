@@ -56,10 +56,11 @@ export async function heartbeatTaskLease(
   return leaseUntil;
 }
 
-export async function listClaimableTaskIds(prisma: PrismaClient, limit = 20): Promise<string[]> {
+export async function listClaimableTaskIds(prisma: PrismaClient, limit = 20, taskTypes?: string[]): Promise<string[]> {
   const tasks = await prisma.agentTask.findMany({
     where: {
       attempt: { lt: 20 },
+      ...(taskTypes ? { taskType: { in: taskTypes } } : {}),
       OR: [
         { status: "QUEUED", availableAt: { lte: new Date() } },
         { status: "CHECKPOINTED" },
@@ -84,7 +85,7 @@ async function executeTask(
   } catch {
     return false; // another worker won the claim or task became ineligible
   }
-  const handler = handlers[task.taskType];
+  const handler = Object.prototype.hasOwnProperty.call(handlers, task.taskType) ? handlers[task.taskType] : undefined;
   if (!handler) {
     await failAgentTask(prisma, taskId, workerId, new PermanentTaskError("NO_HANDLER_REGISTERED"));
     return true;
@@ -133,7 +134,7 @@ export async function runAgentOrchestrator(
     while (!signal.aborted) {
       await recoverExpiredAgentTasks(prisma);
       if (signal.aborted) break;
-      const ids = await listClaimableTaskIds(prisma, concurrency * 2);
+      const ids = await listClaimableTaskIds(prisma, concurrency * 2, Object.keys(handlers));
       let didWork = false;
       for (const id of ids) {
         if (signal.aborted) break;
