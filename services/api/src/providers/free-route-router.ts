@@ -20,10 +20,24 @@ export class FreeRouteRouter {
       seen.add(route.id);
       if ((this.cooldowns.get(route.id) ?? 0) > this.now()) continue;
       try {
-        const value = await route.execute(AbortSignal.any([signal, AbortSignal.timeout(15_000)]));
-        signal.throwIfAborted();
-        this.cooldowns.delete(route.id);
-        return { routeId: route.id, value };
+        const attemptSignal = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
+        let onAbort: (() => void) | undefined;
+        try {
+          const aborted = new Promise<never>((_, reject) => {
+            onAbort = () => reject(attemptSignal.reason);
+            attemptSignal.addEventListener("abort", onAbort, { once: true });
+            if (attemptSignal.aborted) onAbort();
+          });
+          const value = await Promise.race([Promise.resolve().then(() => {
+            attemptSignal.throwIfAborted();
+            return route.execute(attemptSignal);
+          }), aborted]);
+          attemptSignal.throwIfAborted();
+          this.cooldowns.delete(route.id);
+          return { routeId: route.id, value };
+        } finally {
+          if (onAbort) attemptSignal.removeEventListener("abort", onAbort);
+        }
       } catch (error) {
         signal.throwIfAborted();
         if (error instanceof RouteFailure && !error.retryable) throw error;
